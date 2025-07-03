@@ -131,6 +131,19 @@ namespace ZViewer.Services
                     BuildMicrosoftSubcategories(microsoftFolder, group.ToList());
                     parent.Children.Add(microsoftFolder);
                 }
+                else if (group.Key == "CrowdStrike")
+                {
+                    // Special handling for CrowdStrike logs with spaces
+                    var crowdStrikeFolder = new LogTreeItem
+                    {
+                        Name = "CrowdStrike",
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    BuildCrowdStrikeSubcategories(crowdStrikeFolder, group.ToList());
+                    parent.Children.Add(crowdStrikeFolder);
+                }
                 else if (group.Count() <= 20) // Increased from 10 to be less restrictive
                 {
                     var categoryFolder = new LogTreeItem
@@ -225,6 +238,81 @@ namespace ZViewer.Services
                     Name = log,
                     Tag = log
                 });
+            }
+        }
+
+        private static void BuildCrowdStrikeSubcategories(LogTreeItem crowdStrikeFolder, List<string> crowdStrikeLogs)
+        {
+            // Handle CrowdStrike logs with special parsing for spaces
+            foreach (var log in crowdStrikeLogs.OrderBy(log => log))
+            {
+                if (log.StartsWith("CrowdStrike-Falcon Sensor-", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Parse: CrowdStrike-Falcon Sensor-CSFalconService/Operational
+                    var afterPrefix = log.Substring("CrowdStrike-Falcon Sensor-".Length);
+                    var parts = afterPrefix.Split('/');
+
+                    if (parts.Length >= 2)
+                    {
+                        var serviceName = parts[0]; // CSFalconService
+                        var logType = parts[1];      // Operational
+
+                        // Create Falcon Sensor folder if it doesn't exist
+                        var falconSensorFolder = crowdStrikeFolder.Children
+                            .FirstOrDefault(c => c.Name == "Falcon Sensor");
+
+                        if (falconSensorFolder == null)
+                        {
+                            falconSensorFolder = new LogTreeItem
+                            {
+                                Name = "Falcon Sensor",
+                                IsFolder = true,
+                                IsExpanded = false
+                            };
+                            crowdStrikeFolder.Children.Add(falconSensorFolder);
+                        }
+
+                        // Create service folder if it doesn't exist
+                        var serviceFolder = falconSensorFolder.Children
+                            .FirstOrDefault(c => c.Name == serviceName);
+
+                        if (serviceFolder == null)
+                        {
+                            serviceFolder = new LogTreeItem
+                            {
+                                Name = serviceName,
+                                IsFolder = true,
+                                IsExpanded = false
+                            };
+                            falconSensorFolder.Children.Add(serviceFolder);
+                        }
+
+                        // Add the log type
+                        serviceFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = logType,
+                            Tag = log
+                        });
+                    }
+                    else
+                    {
+                        // Fallback: add directly if parsing fails
+                        crowdStrikeFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogDisplayName(log),
+                            Tag = log
+                        });
+                    }
+                }
+                else
+                {
+                    // Other CrowdStrike logs, add directly
+                    crowdStrikeFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = GetLogDisplayName(log),
+                        Tag = log
+                    });
+                }
             }
         }
 

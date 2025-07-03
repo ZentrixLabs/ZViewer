@@ -26,54 +26,72 @@ namespace ZViewer.Services
                 IsExpanded = true
             };
 
-            // Windows Logs
-            var windowsLogs = new LogTreeItem
-            {
-                Name = "Windows Logs",
-                IsFolder = true,
-                IsExpanded = true
-            };
-
-            windowsLogs.Children.AddRange(new[]
-            {
-                new LogTreeItem { Name = "Application", Tag = "Application" },
-                new LogTreeItem { Name = "Security", Tag = "Security" },
-                new LogTreeItem { Name = "Setup", Tag = "Setup" },
-                new LogTreeItem { Name = "System", Tag = "System" }
-            });
-
-            // Applications and Services Logs
-            var appsServicesLogs = new LogTreeItem
-            {
-                Name = "Applications and Services Logs",
-                IsFolder = true,
-                IsExpanded = false
-            };
-
             try
             {
-                var allLogs = await _eventLogService.GetAvailableLogsAsync();
-                var serviceLogs = allLogs.Where(log =>
-                    !IsWindowsLog(log) &&
-                    !log.Equals("All", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                // Windows Logs - always add these first
+                var windowsLogs = new LogTreeItem
+                {
+                    Name = "Windows Logs",
+                    IsFolder = true,
+                    IsExpanded = true
+                };
 
-                BuildServiceLogTree(appsServicesLogs, serviceLogs);
+                windowsLogs.Children.AddRange(new[]
+                {
+                    new LogTreeItem { Name = "Application", Tag = "Application" },
+                    new LogTreeItem { Name = "Security", Tag = "Security" },
+                    new LogTreeItem { Name = "Setup", Tag = "Setup" },
+                    new LogTreeItem { Name = "System", Tag = "System" }
+                });
+
+                root.Children.Add(windowsLogs);
+
+                // All Logs quick access
+                root.Children.Add(new LogTreeItem { Name = "All Logs", Tag = "All" });
+
+                // Applications and Services Logs
+                var appsServicesLogs = new LogTreeItem
+                {
+                    Name = "Applications and Services Logs",
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                try
+                {
+                    var allLogs = await _eventLogService.GetAvailableLogsAsync();
+                    var serviceLogs = allLogs.Where(log =>
+                        !IsWindowsLog(log) &&
+                        !log.Equals("All", StringComparison.OrdinalIgnoreCase))
+                        .Take(50) // Limit to prevent UI overload
+                        .ToList();
+
+                    if (serviceLogs.Any())
+                    {
+                        BuildServiceLogTree(appsServicesLogs, serviceLogs);
+                        root.Children.Add(appsServicesLogs);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogError(ex, "Failed to load service logs, but continuing with basic logs");
+                    // Still add the folder even if empty
+                    root.Children.Add(appsServicesLogs);
+                }
             }
             catch (Exception ex)
             {
-                _loggingService.LogError(ex, "Failed to build service logs tree");
+                _loggingService.LogError(ex, "Failed to build complete log tree, returning minimal tree");
+
+                // Return a minimal tree if everything fails
+                root.Children.Clear();
+                root.Children.Add(new LogTreeItem { Name = "Application", Tag = "Application" });
+                root.Children.Add(new LogTreeItem { Name = "System", Tag = "System" });
+                root.Children.Add(new LogTreeItem { Name = "All Logs", Tag = "All" });
             }
-
-            root.Children.Add(windowsLogs);
-            root.Children.Add(appsServicesLogs);
-
-            // All Logs quick access
-            root.Children.Add(new LogTreeItem { Name = "All Logs", Tag = "All" });
 
             return root;
         }
-
         private static bool IsWindowsLog(string logName)
         {
             return logName.Equals("Application", StringComparison.OrdinalIgnoreCase) ||

@@ -1,4 +1,5 @@
-﻿using ZViewer.ViewModels;
+﻿using ZViewer.Models;
+using ZViewer.ViewModels;
 
 namespace ZViewer
 {
@@ -47,14 +48,15 @@ namespace ZViewer
                 viewModel.SaveFilteredEventsCommand.Execute(null);
             }
         }
+
         private void LogTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
         {
-            if (e.NewValue is TreeViewItem selectedItem &&
-                selectedItem.Tag != null &&
+            // The new value will be a LogTreeItem when using ItemsSource binding
+            if (e.NewValue is LogTreeItem logItem &&
+                !string.IsNullOrEmpty(logItem.Tag) &&
                 DataContext is MainViewModel viewModel)
             {
-                var logName = selectedItem.Tag.ToString();
-                viewModel.LogSelectedCommand.Execute(logName);
+                viewModel.LogSelectedCommand.Execute(logItem.Tag);
             }
         }
 
@@ -73,5 +75,7 @@ namespace ZViewer
                 viewModel.ClearFilterCommand.Execute(null);
             }
         }
+
+
     }
 }

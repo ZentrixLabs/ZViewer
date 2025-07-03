@@ -1,4 +1,6 @@
-﻿using System.Windows;
+﻿using System.Diagnostics;
+using System.Windows;
+using System.Windows.Input;
 
 namespace ZViewer.Views
 {
@@ -12,6 +14,15 @@ namespace ZViewer.Views
         private void OK_Click(object sender, RoutedEventArgs e)
         {
             DialogResult = true;
+        }
+
+        private void ZentrixLink_Click(object sender, MouseButtonEventArgs e)
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://zentrixlabs.net",
+                UseShellExecute = true
+            });
         }
     }
 }

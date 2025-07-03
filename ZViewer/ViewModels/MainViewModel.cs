@@ -64,7 +64,7 @@ namespace ZViewer.ViewModels
 
 
         public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService,
-            IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService, ILogTreeService logTreeService)
+                    IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService, ILogTreeService logTreeService)
         {
             _eventLogService = eventLogService;
             _loggingService = loggingService;
@@ -91,13 +91,20 @@ namespace ZViewer.ViewModels
             Load30DaysCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-30), "30 Days"), () => !IsLoading);
             LoadCustomRangeCommand = new RelayCommand(ShowCustomDateRangeDialog, () => !IsLoading);
 
-
             // Subscribe to error service events
             _errorService.StatusUpdated += (_, status) => StatusText = status;
 
-            // Load initial data
-            _ = LoadEventsAsync();
+            // Load initial data - THIS IS THE KEY FIX
+            _ = InitializeAsync();
+        }
 
+        private async Task InitializeAsync()
+        {
+            // Load the log tree first
+            await LoadLogTreeAsync();
+
+            // Then load the events
+            await LoadEventsAsync();
         }
 
         private async Task LoadLogTreeAsync()

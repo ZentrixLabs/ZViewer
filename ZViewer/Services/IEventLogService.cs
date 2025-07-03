@@ -7,5 +7,6 @@ namespace ZViewer.Services
         Task<IEnumerable<EventLogEntry>> LoadEventsAsync(string logName, DateTime startTime);
         Task<IEnumerable<EventLogEntry>> LoadAllEventsAsync(DateTime startTime);
         Task<IEnumerable<EventLogEntry>> LoadEventsAsync(IEnumerable<string> logNames, DateTime startTime);
+        Task<IEnumerable<string>> GetAvailableLogsAsync();
     }
 }

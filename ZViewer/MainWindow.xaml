@@ -1,6 +1,7 @@
 ﻿<Window x:Class="ZViewer.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ZViewer.Converters"
         Title="ZViewer - Enhanced Event Log Viewer" Height="800" Width="1200"
         WindowStartupLocation="CenterScreen">
     <Grid>
@@ -71,8 +72,19 @@
                               Margin="10,10,10,5" FontSize="14"/>
 
                     <TreeView Grid.Row="1" Name="LogTreeView" Margin="5" 
-         SelectedItemChanged="LogTreeView_SelectedItemChanged"
+         ItemsSource="{Binding LogTree.Children}"
          BorderThickness="0">
+                        <TreeView.Resources>
+                            <!-- Local converter -->
+                            <local:BooleanToFontWeightConverter x:Key="BoolToFontWeightConverter"/>
+
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded}"/>
+                                <Setter Property="Padding" Value="3"/>
+                                <EventSetter Event="Selected" Handler="TreeViewItem_Selected"/>
+                            </Style>
+                        </TreeView.Resources>
+
                         <TreeView.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="Filter Current Log..." Click="FilterCurrentLog_Click"/>
@@ -88,40 +100,13 @@
                             </ContextMenu>
                         </TreeView.ContextMenu>
 
-                        <TreeView.Resources>
-                            <Style TargetType="TreeViewItem">
-                                <Setter Property="IsExpanded" Value="True"/>
-                                <Setter Property="Padding" Value="3"/>
-                            </Style>
-                        </TreeView.Resources>
-
-                        <!-- Event Viewer (Local) Root -->
-                        <TreeViewItem Header="Event Viewer (Local)" FontWeight="Bold" IsExpanded="True">
-
-                            <!-- Windows Logs -->
-                            <TreeViewItem Header="Windows Logs" FontWeight="Bold" IsExpanded="True">
-                                <TreeViewItem Header="Application" Tag="Application"/>
-                                <TreeViewItem Header="Security" Tag="Security"/>
-                                <TreeViewItem Header="Setup" Tag="Setup"/>
-                                <TreeViewItem Header="System" Tag="System"/>
-                            </TreeViewItem>
-
-                            <!-- Applications and Services Logs -->
-                            <TreeViewItem Header="Applications and Services Logs" FontWeight="Bold" IsExpanded="False">
-                                <!-- These will be populated later -->
-                                <TreeViewItem Header="Microsoft" FontWeight="Bold" IsExpanded="False">
-                                    <TreeViewItem Header="Windows" FontWeight="Bold" IsExpanded="False">
-                                        <!-- Future: Add specific Windows service logs -->
-                                        <TreeViewItem Header="PowerShell/Operational" Tag="Microsoft-Windows-PowerShell/Operational" IsEnabled="False"/>
-                                        <TreeViewItem Header="DNS-Client/Operational" Tag="Microsoft-Windows-DNS-Client/Operational" IsEnabled="False"/>
-                                    </TreeViewItem>
-                                </TreeViewItem>
-                            </TreeViewItem>
-
-                        </TreeViewItem>
-
-                        <!-- Quick Access - All Logs -->
-                        <TreeViewItem Header="All Logs" Tag="All" FontWeight="Bold"/>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                <TextBlock Text="{Binding Name}" 
+                       Tag="{Binding Tag}"
+                       FontWeight="{Binding IsFolder, Converter={StaticResource BoolToFontWeightConverter}}"/>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
                     </TreeView>
                 </Grid>
             </Border>

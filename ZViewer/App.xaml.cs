@@ -21,6 +21,7 @@ namespace ZViewer
                     services.AddSingleton<IXmlFormatterService, XmlFormatterService>();
                     services.AddSingleton<IExportService, ExportService>();
                     services.AddSingleton<ILogPropertiesService, LogPropertiesService>();
+                    services.AddSingleton<ILogTreeService, LogTreeService>();
 
                     // ViewModels
                     services.AddTransient<MainViewModel>();

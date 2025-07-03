@@ -18,11 +18,19 @@ namespace ZViewer.ViewModels
         private FilterCriteria? _currentFilter;
         private readonly IExportService _exportService;
         private readonly ILogPropertiesService _logPropertiesService;
+        private readonly ILogTreeService _logTreeService;
+
 
         private string _statusText = "Ready";
         private bool _isLoading;
         private string _currentLogFilter = "All";
         private string _currentLogDisplayText = "All Logs - Last 24 Hours";
+        private bool _isLoadingTree;
+        public bool IsLoadingTree
+        {
+            get => _isLoadingTree;
+            set => SetProperty(ref _isLoadingTree, value);
+        }
         public bool HasSelectedEvent => SelectedEvent != null;
         public string SelectedEventXml => SelectedEvent?.RawXml != null
             ? _xmlFormatterService.FormatXml(SelectedEvent.RawXml)
@@ -43,6 +51,12 @@ namespace ZViewer.ViewModels
             get => _currentTimeRange;
             set => SetProperty(ref _currentTimeRange, value);
         }
+        private LogTreeItem? _logTree;
+        public LogTreeItem? LogTree
+        {
+            get => _logTree;
+            set => SetProperty(ref _logTree, value);
+        }
         public ICommand Load24HoursCommand { get; }
         public ICommand Load7DaysCommand { get; }
         public ICommand Load30DaysCommand { get; }
@@ -50,7 +64,7 @@ namespace ZViewer.ViewModels
 
 
         public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService,
-            IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService)
+            IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService, ILogTreeService logTreeService)
         {
             _eventLogService = eventLogService;
             _loggingService = loggingService;
@@ -58,6 +72,7 @@ namespace ZViewer.ViewModels
             _xmlFormatterService = xmlFormatterService;
             _exportService = exportService;
             _logPropertiesService = logPropertiesService;
+            _logTreeService = logTreeService;
 
             EventEntries = new ObservableCollection<EventLogEntryViewModel>();
             _collectionViewSource = new CollectionViewSource { Source = EventEntries };
@@ -83,6 +98,27 @@ namespace ZViewer.ViewModels
             // Load initial data
             _ = LoadEventsAsync();
 
+        }
+
+        private async Task LoadLogTreeAsync()
+        {
+            try
+            {
+                IsLoadingTree = true;
+                StatusText = "Loading event logs...";
+
+                LogTree = await _logTreeService.BuildLogTreeAsync();
+
+                StatusText = "Event logs loaded successfully";
+            }
+            catch (Exception ex)
+            {
+                _errorService.HandleError(ex, "Failed to load log tree");
+            }
+            finally
+            {
+                IsLoadingTree = false;
+            }
         }
 
         private async Task LoadTimeRangeAsync(DateTime startTime, string timeRangeName)

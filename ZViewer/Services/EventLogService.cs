@@ -49,7 +49,9 @@ namespace ZViewer.Services
                 {
                     _loggingService.LogInformation("Loading events from {LogName} since {StartTime}", logName, startTime);
 
-                    string query = $"*[System[TimeCreated[@SystemTime >= '{startTime:yyyy-MM-ddTHH:mm:ss.fffZ}']]]";
+                    var utcStartTime = startTime.ToUniversalTime();
+                    string query = $"*[System[TimeCreated[@SystemTime >= '{utcStartTime:yyyy-MM-ddTHH:mm:ss.000Z}']]]";
+
                     var eventQuery = new EventLogQuery(logName, PathType.LogName, query);
 
                     using (var reader = new EventLogReader(eventQuery))
@@ -57,20 +59,27 @@ namespace ZViewer.Services
                         EventRecord eventRecord;
                         while ((eventRecord = reader.ReadEvent()) != null)
                         {
-                            var entry = new EventLogEntry
+                            try
                             {
-                                LogName = logName,
-                                Level = GetLevelString(eventRecord.Level),
-                                TimeCreated = eventRecord.TimeCreated ?? DateTime.MinValue,
-                                Source = eventRecord.ProviderName ?? "Unknown",
-                                EventId = eventRecord.Id,
-                                TaskCategory = eventRecord.TaskDisplayName ?? eventRecord.Task?.ToString() ?? "None",
-                                Description = eventRecord.FormatDescription() ?? "No description available",
-                                RawXml = eventRecord.ToXml()
+                                var entry = new EventLogEntry
+                                {
+                                    LogName = logName,
+                                    Level = GetLevelString(eventRecord.Level),
+                                    TimeCreated = eventRecord.TimeCreated ?? DateTime.MinValue,
+                                    Source = eventRecord.ProviderName ?? "Unknown",
+                                    EventId = eventRecord.Id,
+                                    TaskCategory = GetSafeTaskCategory(eventRecord),
+                                    Description = GetSafeDescription(eventRecord),
+                                    RawXml = eventRecord.ToXml()
+                                };
 
-                            };
-
-                            entries.Add(entry);
+                                entries.Add(entry);
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log but continue processing other events
+                                _loggingService.LogWarning("Skipped event from {LogName}: {Error}", logName, ex.Message);
+                            }
                         }
                     }
 
@@ -86,6 +95,85 @@ namespace ZViewer.Services
                 }
 
                 return entries;
+            });
+        }
+
+        private static string GetSafeTaskCategory(EventRecord eventRecord)
+        {
+            try
+            {
+                // Try TaskDisplayName first
+                var taskDisplayName = eventRecord.TaskDisplayName;
+                if (!string.IsNullOrEmpty(taskDisplayName))
+                    return taskDisplayName;
+            }
+            catch
+            {
+                // TaskDisplayName failed, try Task ID
+            }
+
+            try
+            {
+                var task = eventRecord.Task;
+                if (task.HasValue)
+                    return task.Value.ToString();
+            }
+            catch
+            {
+                // Task failed too
+            }
+
+            return "None";
+        }
+
+        private static string GetSafeDescription(EventRecord eventRecord)
+        {
+            try
+            {
+                var description = eventRecord.FormatDescription();
+                if (!string.IsNullOrEmpty(description))
+                    return description;
+            }
+            catch
+            {
+                // FormatDescription failed
+            }
+
+            return $"Event ID {eventRecord.Id} (Description unavailable due to missing provider metadata)";
+        }
+
+        public async Task<IEnumerable<string>> GetAvailableLogsAsync()
+        {
+            return await Task.Run(() =>
+            {
+                var logs = new List<string>();
+
+                try
+                {
+                    using var session = new EventLogSession();
+                    foreach (string logName in session.GetLogNames())
+                    {
+                        try
+                        {
+                            // Try to get log information to ensure it's accessible
+                            var logInfo = session.GetLogInformation(logName, PathType.LogName);
+                            if (logInfo.RecordCount.HasValue || logInfo.IsLogFull.HasValue)
+                            {
+                                logs.Add(logName);
+                            }
+                        }
+                        catch
+                        {
+                            // Skip logs we can't access or that don't exist
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogError(ex, "Failed to enumerate event logs");
+                }
+
+                return logs.OrderBy(x => x);
             });
         }
 

@@ -1,8 +1,8 @@
 ﻿<Window x:Class="ZViewer.MainWindow"
-            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-            Title="Enhanced Event Log Viewer" Height="800" Width="1200"
-            WindowStartupLocation="CenterScreen">
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ZViewer - Enhanced Event Log Viewer" Height="800" Width="1200"
+        WindowStartupLocation="CenterScreen">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -13,58 +13,112 @@
         <!-- Toolbar -->
         <Border Grid.Row="0" Background="#F0F0F0" Padding="10,5">
             <StackPanel Orientation="Horizontal">
-                <Button Name="RefreshButton" Content="🔄 Refresh" Width="80" Height="30" 
-                            Margin="0,0,10,0" Click="RefreshButton_Click"/>
-                <Button Name="FilterButton" Content="🔍 Filter" Width="80" Height="30" 
-                            Margin="0,0,10,0" Click="FilterButton_Click"/>
-                <Button Name="ExportButton" Content="📁 Export" Width="80" Height="30" 
-                            Margin="0,0,10,0" Click="ExportButton_Click"/>
-                <ProgressBar Name="LoadingProgressBar" Width="200" Height="20" 
-                                Margin="20,0,0,0" Visibility="Hidden"/>
+                <Button Content="🔄 Refresh" Width="80" Height="30" 
+                        Margin="0,0,10,0" Command="{Binding RefreshCommand}"/>
+                <Button Content="🔍 Filter" Width="80" Height="30" 
+                        Margin="0,0,10,0" Command="{Binding FilterCommand}"/>
+                <Button Content="📁 Export" Width="80" Height="30" 
+                        Margin="0,0,10,0" Command="{Binding ExportCommand}"/>
+                <ProgressBar Width="200" Height="20" Margin="20,0,0,0" 
+                            Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            IsIndeterminate="True"/>
             </StackPanel>
         </Border>
 
-        <!-- Main Data Grid -->
-        <DataGrid Grid.Row="1" Name="EventDataGrid" 
-                      AutoGenerateColumns="False" 
-                      IsReadOnly="True"
-                      GridLinesVisibility="Horizontal"
-                      HeadersVisibility="Column"
-                      SelectionMode="Single"
-                      CanUserSortColumns="True"
-                      CanUserReorderColumns="True"
-                      VirtualizingPanel.IsVirtualizing="True"
-                      VirtualizingPanel.VirtualizationMode="Recycling"
-                      EnableRowVirtualization="True">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Log" Binding="{Binding LogName}" Width="80"/>
-                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
-                <DataGridTextColumn Header="Date and Time" Binding="{Binding TimeCreated, StringFormat='yyyy-MM-dd HH:mm:ss'}" Width="140"/>
-                <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="200"/>
-                <DataGridTextColumn Header="Event ID" Binding="{Binding EventId}" Width="80"/>
-                <DataGridTextColumn Header="Task Category" Binding="{Binding TaskCategory}" Width="150"/>
-                <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="*"/>
-            </DataGrid.Columns>
-            <DataGrid.RowStyle>
-                <Style TargetType="DataGridRow">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding Level}" Value="Critical">
-                            <Setter Property="Background" Value="#FFEBEE"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Level}" Value="Error">
-                            <Setter Property="Background" Value="#FFEBEE"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Level}" Value="Warning">
-                            <Setter Property="Background" Value="#FFF8E1"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </DataGrid.RowStyle>
-        </DataGrid>
+        <!-- Main Content Area -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Sidebar -->
+            <Border Grid.Column="0" Background="#F8F9FA" BorderBrush="#E0E0E0" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Event Logs" FontWeight="Bold" 
+                              Margin="10,10,10,5" FontSize="14"/>
+
+                    <TreeView Grid.Row="1" Name="LogTreeView" Margin="5" 
+                             SelectedItemChanged="LogTreeView_SelectedItemChanged"
+                             BorderThickness="0">
+                        <TreeView.Resources>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="True"/>
+                                <Setter Property="Padding" Value="3"/>
+                            </Style>
+                        </TreeView.Resources>
+
+                        <TreeViewItem Header="Windows Logs" FontWeight="Bold">
+                            <TreeViewItem Header="Application" Tag="Application"/>
+                            <TreeViewItem Header="Security" Tag="Security"/>
+                            <TreeViewItem Header="Setup" Tag="Setup"/>
+                            <TreeViewItem Header="System" Tag="System"/>
+                        </TreeViewItem>
+                        <TreeViewItem Header="All Logs" Tag="All" FontWeight="Bold"/>
+                    </TreeView>
+                </Grid>
+            </Border>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#E0E0E0"/>
+
+            <!-- Right Content -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Current Log Header -->
+                <Border Grid.Row="0" Background="#F0F0F0" Padding="10,5" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+                    <TextBlock Text="{Binding CurrentLogDisplayText}" FontWeight="Bold" FontSize="12"/>
+                </Border>
+
+                <!-- Data Grid -->
+                <DataGrid Grid.Row="1" ItemsSource="{Binding EventsView}"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                          SelectionMode="Single" CanUserSortColumns="True"
+                          CanUserReorderColumns="True"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          EnableRowVirtualization="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
+                        <DataGridTextColumn Header="Date and Time" Binding="{Binding TimeCreated, StringFormat='yyyy-MM-dd HH:mm:ss'}" Width="140"/>
+                        <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="200"/>
+                        <DataGridTextColumn Header="Event ID" Binding="{Binding EventId}" Width="80"/>
+                        <DataGridTextColumn Header="Task Category" Binding="{Binding TaskCategory}" Width="150"/>
+                        <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="*"/>
+                    </DataGrid.Columns>
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Level}" Value="Critical">
+                                    <Setter Property="Background" Value="#FFEBEE"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="Error">
+                                    <Setter Property="Background" Value="#FFEBEE"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="Warning">
+                                    <Setter Property="Background" Value="#FFF8E1"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                </DataGrid>
+            </Grid>
+        </Grid>
 
         <!-- Status Bar -->
         <Border Grid.Row="2" Background="#F0F0F0" Padding="10,5">
-            <TextBlock Name="StatusTextBlock" Text="Ready" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"/>
         </Border>
     </Grid>
 </Window>

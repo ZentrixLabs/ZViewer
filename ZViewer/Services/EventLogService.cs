@@ -219,6 +219,10 @@ namespace ZViewer.Services
             if (IsStandardWindowsLog(logName))
                 return true;
 
+            // Filter out unwanted standalone logs early
+            if (IsUnwantedStandaloneLog(logName))
+                return false;
+
             // Empty logs typically don't show unless they're important
             if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value == 0)
             {
@@ -307,6 +311,30 @@ namespace ZViewer.Services
 
             return technicalPatterns.Any(pattern =>
                 logName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsUnwantedStandaloneLog(string logName)
+        {
+            // These standalone logs should be filtered out as they don't appear in standard Event Viewer
+            var unwantedLogs = new[]
+            {
+                "FirstUXPerf",
+                "NIS",
+                "TabletPC_InputPanel_Channel",
+                "MediaFoundationContentProtection",
+                "EndpointMapper",
+                "DirectShow",
+                "Analytic", // Generic "Analytic" log
+                "Navigator",
+                "DnsClient",
+                "Internet Explorer",
+                "MSDiagnostics",
+                "RemoteAccess"
+            };
+
+            return unwantedLogs.Any(unwanted =>
+                logName.Equals(unwanted, StringComparison.OrdinalIgnoreCase) ||
+                logName.StartsWith(unwanted, StringComparison.OrdinalIgnoreCase));
         }
 
         // New paged loading method

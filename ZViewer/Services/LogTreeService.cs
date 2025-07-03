@@ -158,6 +158,7 @@ namespace ZViewer.Services
                     // Handle other Microsoft logs (non-Windows)
                     var otherMicrosoftLogs = group
                         .Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                        .Where(log => ShouldShowNonWindowsMicrosoftLog(log))
                         .OrderBy(log => log)
                         .ToList();
 
@@ -328,6 +329,29 @@ namespace ZViewer.Services
                          .Replace("/Analytic", " (Analytic)")
                          .Replace("/Debug", " (Debug)")
                          .Replace("-", " ");
+        }
+
+        private static bool ShouldShowNonWindowsMicrosoftLog(string logName)
+        {
+            // Show all non-Windows Microsoft logs that pass the main filtering
+            // The main filtering in EventLogService already handles the visibility logic
+            return true;
+        }
+
+        private static bool ShouldShowStandaloneLog(string logName)
+        {
+            // These are the allowed standalone logs based on your EventViewerVisibleLogs.json
+            var allowedStandalone = new[]
+            {
+                "CrowdStrike-Falcon Sensor-CSFalconService/Operational",
+                "OAlerts",
+                "PDQ.com",
+                "PowerShellCore/Operational",
+                "Windows PowerShell"
+            };
+
+            return allowedStandalone.Any(allowed =>
+                logName.Equals(allowed, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

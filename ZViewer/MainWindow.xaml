@@ -24,11 +24,30 @@
         <!-- Toolbar -->
         <Border Grid.Row="1" Background="#F0F0F0" Padding="10,5">
             <StackPanel Orientation="Horizontal">
+                <!-- Existing buttons -->
                 <Button Content="🔄 Refresh" Width="80" Height="30" 
-                        Margin="0,0,10,0" Command="{Binding RefreshCommand}"/>
-                <ProgressBar Width="auto" Height="20" Margin="150,0,0,0"
-                            Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            IsIndeterminate="True"/>
+                Margin="0,0,10,0" Command="{Binding RefreshCommand}"/>
+                <Button Content="📁 Export" Width="80" Height="30" 
+                Margin="0,0,10,0" Command="{Binding ExportCommand}"/>
+
+                <!-- Separator -->
+                <Rectangle Width="1" Height="20" Fill="#CCCCCC" Margin="10,0" VerticalAlignment="Center"/>
+
+                <!-- Time Range Buttons -->
+                <TextBlock Text="Load:" VerticalAlignment="Center" Margin="0,0,5,0" FontWeight="Bold"/>
+                <Button Content="24 Hours" Width="80" Height="30" 
+                Margin="0,0,5,0" Command="{Binding Load24HoursCommand}"/>
+                <Button Content="7 Days" Width="70" Height="30" 
+                Margin="0,0,5,0" Command="{Binding Load7DaysCommand}"/>
+                <Button Content="30 Days" Width="70" Height="30" 
+                Margin="0,0,5,0" Command="{Binding Load30DaysCommand}"/>
+                <Button Content="Custom..." Width="70" Height="30" 
+                Margin="0,0,10,0" Command="{Binding LoadCustomRangeCommand}"/>
+
+                <!-- Progress Bar -->
+                <ProgressBar Width="200" Height="20" Margin="20,0,0,0" 
+                    Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    IsIndeterminate="True"/>
             </StackPanel>
         </Border>
 
@@ -52,22 +71,23 @@
                               Margin="10,10,10,5" FontSize="14"/>
 
                     <TreeView Grid.Row="1" Name="LogTreeView" Margin="5" 
-                             SelectedItemChanged="LogTreeView_SelectedItemChanged"
-                             BorderThickness="0">
+         SelectedItemChanged="LogTreeView_SelectedItemChanged"
+         BorderThickness="0">
                         <TreeView.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="Filter Current Log..." Click="FilterCurrentLog_Click"/>
                                 <MenuItem Name="ClearFilterMenuItem" Header="Clear Filter" Click="ClearFilter_Click" 
-                                    Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                      Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 <Separator Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 <Separator/>
                                 <MenuItem Header="Save All Events As..." Click="SaveAllEvents_Click"/>
                                 <MenuItem Name="SaveFilteredMenuItem" Header="Save Filtered Log File As..." Click="SaveFilteredEvents_Click"
-                                    Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                      Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 <Separator/>
                                 <MenuItem Header="Properties" Click="Properties_Click"/>
                             </ContextMenu>
                         </TreeView.ContextMenu>
+
                         <TreeView.Resources>
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="True"/>
@@ -75,12 +95,32 @@
                             </Style>
                         </TreeView.Resources>
 
-                        <TreeViewItem Header="Windows Logs" FontWeight="Bold">
-                            <TreeViewItem Header="Application" Tag="Application"/>
-                            <TreeViewItem Header="Security" Tag="Security"/>
-                            <TreeViewItem Header="Setup" Tag="Setup"/>
-                            <TreeViewItem Header="System" Tag="System"/>
+                        <!-- Event Viewer (Local) Root -->
+                        <TreeViewItem Header="Event Viewer (Local)" FontWeight="Bold" IsExpanded="True">
+
+                            <!-- Windows Logs -->
+                            <TreeViewItem Header="Windows Logs" FontWeight="Bold" IsExpanded="True">
+                                <TreeViewItem Header="Application" Tag="Application"/>
+                                <TreeViewItem Header="Security" Tag="Security"/>
+                                <TreeViewItem Header="Setup" Tag="Setup"/>
+                                <TreeViewItem Header="System" Tag="System"/>
+                            </TreeViewItem>
+
+                            <!-- Applications and Services Logs -->
+                            <TreeViewItem Header="Applications and Services Logs" FontWeight="Bold" IsExpanded="False">
+                                <!-- These will be populated later -->
+                                <TreeViewItem Header="Microsoft" FontWeight="Bold" IsExpanded="False">
+                                    <TreeViewItem Header="Windows" FontWeight="Bold" IsExpanded="False">
+                                        <!-- Future: Add specific Windows service logs -->
+                                        <TreeViewItem Header="PowerShell/Operational" Tag="Microsoft-Windows-PowerShell/Operational" IsEnabled="False"/>
+                                        <TreeViewItem Header="DNS-Client/Operational" Tag="Microsoft-Windows-DNS-Client/Operational" IsEnabled="False"/>
+                                    </TreeViewItem>
+                                </TreeViewItem>
+                            </TreeViewItem>
+
                         </TreeViewItem>
+
+                        <!-- Quick Access - All Logs -->
                         <TreeViewItem Header="All Logs" Tag="All" FontWeight="Bold"/>
                     </TreeView>
                 </Grid>

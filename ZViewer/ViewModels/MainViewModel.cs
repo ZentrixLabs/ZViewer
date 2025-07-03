@@ -36,6 +36,18 @@ namespace ZViewer.ViewModels
         public ICommand ClearFilterCommand { get; }
         public ICommand SaveAllEventsCommand { get; }
         public ICommand SaveFilteredEventsCommand { get; }
+        private DateTime _currentStartTime = DateTime.Now.AddDays(-1);
+        private string _currentTimeRange = "24 Hours";
+        public string CurrentTimeRange
+        {
+            get => _currentTimeRange;
+            set => SetProperty(ref _currentTimeRange, value);
+        }
+        public ICommand Load24HoursCommand { get; }
+        public ICommand Load7DaysCommand { get; }
+        public ICommand Load30DaysCommand { get; }
+        public ICommand LoadCustomRangeCommand { get; }
+
 
         public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService,
             IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService)
@@ -59,6 +71,11 @@ namespace ZViewer.ViewModels
             ShowFilterDialogCommand = new RelayCommand<Window>(ShowFilterDialog);
             ClearFilterCommand = new RelayCommand(ClearFilter);
             LogSelectedCommand = new RelayCommand<string>(OnLogSelected);
+            Load24HoursCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-1), "24 Hours"), () => !IsLoading);
+            Load7DaysCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-7), "7 Days"), () => !IsLoading);
+            Load30DaysCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-30), "30 Days"), () => !IsLoading);
+            LoadCustomRangeCommand = new RelayCommand(ShowCustomDateRangeDialog, () => !IsLoading);
+
 
             // Subscribe to error service events
             _errorService.StatusUpdated += (_, status) => StatusText = status;
@@ -66,6 +83,36 @@ namespace ZViewer.ViewModels
             // Load initial data
             _ = LoadEventsAsync();
 
+        }
+
+        private async Task LoadTimeRangeAsync(DateTime startTime, string timeRangeName)
+        {
+            _currentStartTime = startTime;
+            CurrentTimeRange = timeRangeName;
+            await LoadEventsAsync();
+            UpdateCurrentLogDisplayText();
+        }
+
+        private void ShowCustomDateRangeDialog()
+        {
+            var dialog = new Views.CustomDateRangeDialog()
+            {
+                Owner = Application.Current.MainWindow
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                _currentStartTime = dialog.FromDate;
+                CurrentTimeRange = $"{dialog.FromDate:MMM dd} - {dialog.ToDate:MMM dd}";
+                _ = LoadEventsAsync();
+                UpdateCurrentLogDisplayText();
+            }
+        }
+
+        private void UpdateCurrentLogDisplayText()
+        {
+            var logName = _currentLogFilter == "All" ? "All Logs" : $"{_currentLogFilter} Log";
+            CurrentLogDisplayText = $"{logName} - {CurrentTimeRange}";
         }
 
         public async Task ShowPropertiesAsync(Window? owner = null)
@@ -254,10 +301,7 @@ namespace ZViewer.ViewModels
             {
                 IsLoading = true;
                 StatusText = "Loading events...";
-
-                var startTime = DateTime.Now.AddDays(-1);
-                var entries = await _eventLogService.LoadAllEventsAsync(startTime);
-
+                var entries = await _eventLogService.LoadAllEventsAsync(_currentStartTime);
                 EventEntries.Clear();
                 foreach (var entry in entries)
                 {

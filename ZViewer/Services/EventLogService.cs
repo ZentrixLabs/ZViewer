@@ -268,6 +268,9 @@ namespace ZViewer.Services
 
                     int processed = 0;
                     int successful = 0;
+                    int accessDenied = 0;
+                    int otherErrors = 0;
+                    int emptyLogs = 0;
 
                     foreach (string logName in logNames)
                     {
@@ -275,47 +278,88 @@ namespace ZViewer.Services
                         {
                             processed++;
 
-                            // Try to get log information to ensure it's accessible
+                            // First check if the log has basic accessibility
                             var logInfo = session.GetLogInformation(logName, PathType.LogName);
 
-                            // Accept logs that have record count info OR seem to be valid logs
-                            if (logInfo.RecordCount.HasValue ||
-                                logInfo.IsLogFull.HasValue ||
-                                !string.IsNullOrEmpty(logInfo.LogFilePath))
+                            // For Microsoft-Windows logs, be more lenient - show them even if empty
+                            // For other logs, check if they have records or seem active
+                            bool shouldInclude = false;
+
+                            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Include all accessible Microsoft-Windows logs regardless of current record count
+                                shouldInclude = true;
+                            }
+                            else if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value > 0)
+                            {
+                                // Include non-Microsoft logs that have records
+                                shouldInclude = true;
+                            }
+                            else
+                            {
+                                // For other logs, try to read an event to see if it's truly accessible
+                                try
+                                {
+                                    var logQuery = new EventLogQuery(logName, PathType.LogName);
+                                    using var reader = new EventLogReader(logQuery);
+                                    var testEvent = reader.ReadEvent(); // This will be null for empty logs, but won't throw
+                                    shouldInclude = true; // If we get here, the log is accessible
+                                }
+                                catch
+                                {
+                                    // If we can't read from it, skip it
+                                    shouldInclude = false;
+                                }
+                            }
+
+                            if (shouldInclude)
                             {
                                 logs.Add(logName);
                                 successful++;
 
-                                if (successful % 50 == 0)
+                                if (successful % 100 == 0)
                                 {
                                     _loggingService.LogInformation("Processed {Successful} valid logs so far...", successful);
                                 }
+                            }
+                            else
+                            {
+                                emptyLogs++;
                             }
                         }
                         catch (UnauthorizedAccessException)
                         {
                             // Skip logs we can't access but continue processing
-                            _loggingService.LogDebug("Access denied to log: {LogName}", logName);
+                            accessDenied++;
+                            if (accessDenied <= 5) // Only log first few to avoid spam
+                            {
+                                _loggingService.LogWarning("Access denied to log: {LogName}", logName);
+                            }
                         }
                         catch (Exception ex)
                         {
                             // Log the error but continue processing other logs
-                            _loggingService.LogDebug("Failed to access log {LogName}: {Error}", logName, ex.Message);
+                            otherErrors++;
+                            if (otherErrors <= 10) // Only log first few to avoid spam
+                            {
+                                _loggingService.LogWarning("Failed to access log {LogName}: {Error}", logName, ex.Message);
+                            }
                         }
 
-                        // Log progress every 100 logs
-                        if (processed % 100 == 0)
+                        // Log progress every 200 logs
+                        if (processed % 200 == 0)
                         {
-                            _loggingService.LogInformation("Enumeration progress: {Processed}/{Total} logs processed, {Successful} accessible",
-                                processed, logNames.Count, successful);
+                            _loggingService.LogInformation("Enumeration progress: {Processed}/{Total} logs processed, {Successful} accessible, {Empty} empty, {AccessDenied} access denied, {OtherErrors} other errors",
+                                processed, logNames.Count, successful, emptyLogs, accessDenied, otherErrors);
                         }
                     }
 
-                    _loggingService.LogInformation("Log enumeration complete: {Successful}/{Total} logs accessible", successful, processed);
+                    _loggingService.LogInformation("Log enumeration complete: {Successful}/{Total} logs accessible, {Empty} empty logs skipped, {AccessDenied} access denied, {OtherErrors} other errors",
+                        successful, processed, emptyLogs, accessDenied, otherErrors);
                 }
                 catch (Exception ex)
                 {
-                    _loggingService.LogError(ex, "Failed to enumerate event logs");
+                    _loggingService.LogError(ex, "Failed to enumerate event logs completely");
 
                     // Fallback to basic Windows logs if enumeration fails completely
                     if (logs.Count == 0)

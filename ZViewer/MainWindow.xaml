@@ -17,6 +17,30 @@
             <MenuItem Header="_File">
                 <MenuItem Header="_Close" Click="Close_Click" InputGestureText="Alt+F4"/>
             </MenuItem>
+            <MenuItem Header="_Find">
+                <MenuItem Header="Security Events" IsEnabled="False" FontWeight="Bold"/>
+                <MenuItem Header="Failed Logins (4625)" Click="FindFailedLogins_Click"/>
+                <MenuItem Header="Successful Logins (4624)" Click="FindSuccessfulLogins_Click"/>
+                <MenuItem Header="Account Lockouts (4740)" Click="FindAccountLockouts_Click"/>
+                <MenuItem Header="Password Changes (4724)" Click="FindPasswordChanges_Click"/>
+                <Separator/>
+                <MenuItem Header="System Events" IsEnabled="False" FontWeight="Bold"/>
+                <MenuItem Header="System Startup (6005, 6006)" Click="FindSystemStartup_Click"/>
+                <MenuItem Header="Service Failures (7034)" Click="FindServiceFailures_Click"/>
+                <MenuItem Header="Blue Screen Events (1001)" Click="FindBlueScreens_Click"/>
+                <MenuItem Header="Disk Errors (7, 15)" Click="FindDiskErrors_Click"/>
+                <Separator/>
+                <MenuItem Header="Application Events" IsEnabled="False" FontWeight="Bold"/>
+                <MenuItem Header="Application Crashes (1000)" Click="FindAppCrashes_Click"/>
+                <MenuItem Header="Application Hangs (1002)" Click="FindAppHangs_Click"/>
+                <MenuItem Header=".NET Exceptions (1026)" Click="FindDotNetExceptions_Click"/>
+                <Separator/>
+                <MenuItem Header="PowerShell Events" IsEnabled="False" FontWeight="Bold"/>
+                <MenuItem Header="PowerShell Execution (4103, 4104)" Click="FindPowerShellExecution_Click"/>
+                <MenuItem Header="PowerShell Script Blocks (4104)" Click="FindPowerShellScripts_Click"/>
+                <Separator/>
+                <MenuItem Header="Custom Search..." Click="FindCustom_Click"/>
+            </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About ZViewer..." Click="About_Click"/>
             </MenuItem>

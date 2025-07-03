@@ -10,6 +10,10 @@
 
 	<!-- Application Icon -->
 	<ApplicationIcon>Assets\ZViewer.ico</ApplicationIcon>
+
+	<!-- Suppress Windows-only API warnings since this is a Windows-specific app -->
+	<NoWarn>$(NoWarn);CA1416</NoWarn>
+	  
   </PropertyGroup>
 
   <ItemGroup>

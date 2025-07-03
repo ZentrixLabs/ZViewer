@@ -557,6 +557,16 @@ namespace ZViewer.ViewModels
             StatusText = $"Filter applied - showing {filteredCount} events";
         }
 
+        public void ApplyPredefinedFilter(FilterCriteria criteria, string description)
+        {
+            _currentFilter = criteria;
+            ApplyFilter(criteria);
+            IsFilterApplied = true;
+
+            var filteredCount = _collectionViewSource.View.Cast<object>().Count();
+            StatusText = $"Showing {filteredCount} {description} events";
+        }
+
         private void ClearFilter()
         {
             _currentFilter = null;

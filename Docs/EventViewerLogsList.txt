@@ -1,0 +1,120 @@
+﻿=== WINDOWS LOGS ===
+Application
+Setup
+System
+
+=== MICROSOFT WINDOWS LOGS ===
+Microsoft-Windows-AAD/Operational
+Microsoft-Windows-Application Server-Applications/Operational
+Microsoft-Windows-Application-Experience/Program-Compatibility-Assistant
+Microsoft-Windows-Application-Experience/Program-Telemetry
+Microsoft-Windows-AppModel-Runtime/Admin
+Microsoft-Windows-AppReadiness/Admin
+Microsoft-Windows-AppReadiness/Operational
+Microsoft-Windows-AppXDeployment/Operational
+Microsoft-Windows-AppXDeploymentServer/Operational
+Microsoft-Windows-AppxPackaging/Operational
+Microsoft-Windows-Biometrics/Operational
+Microsoft-Windows-Bits-Client/Operational
+Microsoft-Windows-CertificateServicesClient-Lifecycle-System/Operational
+Microsoft-Windows-CertificateServicesClient-Lifecycle-User/Operational
+Microsoft-Windows-CloudStore/Operational
+Microsoft-Windows-ClusterAwareUpdating-Management/Admin
+Microsoft-Windows-CodeIntegrity/Operational
+Microsoft-Windows-Containers-BindFlt/Operational
+Microsoft-Windows-Containers-Wcifs/Operational
+Microsoft-Windows-Crypto-DPAPI/Operational
+Microsoft-Windows-DataIntegrityScan/Admin
+Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin
+Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Operational
+Microsoft-Windows-DeviceSetupManager/Admin
+Microsoft-Windows-DeviceSetupManager/Operational
+Microsoft-Windows-Dhcp-Client/Admin
+Microsoft-Windows-Diagnosis-DPS/Operational
+Microsoft-Windows-Diagnosis-PCW/Operational
+Microsoft-Windows-Diagnosis-Scheduled/Operational
+Microsoft-Windows-Diagnosis-Scripted/Admin
+Microsoft-Windows-Diagnosis-Scripted/Operational
+Microsoft-Windows-FailoverClustering-Manager/Admin
+Microsoft-Windows-Fault-Tolerant-Heap/Operational
+Microsoft-Windows-Forwarding/Operational
+Microsoft-Windows-HelloForBusiness/Operational
+Microsoft-Windows-IKE/Operational
+Microsoft-Windows-Known Folders API Service
+Microsoft-Windows-LanguagePackSetup/Operational
+Microsoft-Windows-LAPS/Operational
+Microsoft-Windows-MUI/Operational
+Microsoft-Windows-NCSI/Operational
+Microsoft-Windows-NetworkProfile/Operational
+Microsoft-Windows-NlaSvc/Operational
+Microsoft-Windows-Ntfs/Operational
+Microsoft-Windows-Ntfs/WHC
+Microsoft-Windows-NTLM/Operational
+Microsoft-Windows-Partition/Diagnostic
+Microsoft-Windows-PowerShell/Admin
+Microsoft-Windows-PowerShell/Operational
+Microsoft-Windows-PowerShell-DesiredStateConfiguration-FileDownloadManager/Operational
+Microsoft-Windows-PrintService/Admin
+Microsoft-Windows-PushNotification-Platform/Operational
+Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational
+Microsoft-Windows-RemoteDesktopServices-SessionServices/Operational
+Microsoft-Windows-Resource-Exhaustion-Detector/Operational
+Microsoft-Windows-Resource-Exhaustion-Resolver/Operational
+Microsoft-Windows-Security-Audit-Configuration-Client/Operational
+Microsoft-Windows-Security-LessPrivilegedAppContainer/Operational
+Microsoft-Windows-Security-Mitigations/KernelMode
+Microsoft-Windows-Security-Netlogon/Operational
+Microsoft-Windows-Security-SPP-UX-Notifications/ActionCenter
+Microsoft-Windows-SENSE/Operational
+Microsoft-Windows-SenseIR/Operational
+Microsoft-Windows-ServerManager-DeploymentProvider/Operational
+Microsoft-Windows-ServerManager-MgmtProvider/Operational
+Microsoft-Windows-ServerManager-MultiMachine/Operational
+Microsoft-Windows-ShellCommon-StartLayoutPopulation/Operational
+Microsoft-Windows-Shell-Core/AppDefaults
+Microsoft-Windows-Shell-Core/Operational
+Microsoft-Windows-StateRepository/Operational
+Microsoft-Windows-Storage-ClassPnP/Operational
+Microsoft-Windows-StorageManagement/Operational
+Microsoft-Windows-StorageSpaces-Driver/Operational
+Microsoft-Windows-Store/Operational
+Microsoft-Windows-Storsvc/Diagnostic
+Microsoft-Windows-SystemDataArchiver/Diagnostic
+Microsoft-Windows-TaskScheduler/Diagnostic
+Microsoft-Windows-TaskScheduler/Maintenance
+Microsoft-Windows-TaskScheduler/Operational
+Microsoft-Windows-TerminalServices-LocalSessionManager/Operational
+Microsoft-Windows-TerminalServices-RDPClient/Operational
+Microsoft-Windows-TerminalServices-RemoteConnectionManager/Admin
+Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational
+Microsoft-Windows-Time-Service/Operational
+Microsoft-Windows-TWinUI/Operational
+Microsoft-Windows-TZSync/Operational
+Microsoft-Windows-UAC/Operational
+Microsoft-Windows-UniversalTelemetryClient/Operational
+Microsoft-Windows-User Device Registration/Admin
+Microsoft-Windows-User Profile Service/Operational
+Microsoft-Windows-UserPnp/DeviceInstall
+Microsoft-Windows-VolumeSnapshot-Driver/Operational
+Microsoft-Windows-Wcmsvc/Operational
+Microsoft-Windows-WebAuthN/Operational
+Microsoft-Windows-WER-PayloadHealth/Operational
+Microsoft-Windows-WFP/Operational
+Microsoft-Windows-Windows Defender/Operational
+Microsoft-Windows-Windows Defender/WHC
+Microsoft-Windows-Windows Firewall With Advanced Security/Firewall
+Microsoft-Windows-WindowsUpdateClient/Operational
+Microsoft-Windows-WinINet-Config/ProxyConfigChanged
+Microsoft-Windows-Winlogon/Operational
+Microsoft-Windows-WinRM/Operational
+Microsoft-Windows-WMI-Activity/Operational
+
+=== OTHER MICROSOFT LOGS ===
+Microsoft-Client-Licensing-Platform/Admin
+
+=== STANDALONE LOGS ===
+CrowdStrike-Falcon Sensor-CSFalconService/Operational
+OAlerts
+PDQ.com
+PowerShellCore/Operational
+Windows PowerShell

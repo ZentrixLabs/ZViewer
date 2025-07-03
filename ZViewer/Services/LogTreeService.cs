@@ -50,7 +50,7 @@ namespace ZViewer.Services
                 // All Logs quick access
                 root.Children.Add(new LogTreeItem { Name = "All Logs", Tag = "All" });
 
-                // Applications and Services Logs - NOW WITH EVENT VIEWER FILTERING
+                // Applications and Services Logs
                 var appsServicesLogs = new LogTreeItem
                 {
                     Name = "Applications and Services Logs",
@@ -60,31 +60,31 @@ namespace ZViewer.Services
 
                 try
                 {
-                    _loggingService.LogInformation("Starting to load service logs for tree (with Event Viewer filtering)...");
+                    _loggingService.LogInformation("Starting to load service logs for tree...");
 
                     var allLogs = await _eventLogService.GetAvailableLogsAsync();
                     var allLogsList = allLogs.ToList();
 
-                    _loggingService.LogInformation("Retrieved {Count} filtered logs for tree building", allLogsList.Count);
+                    _loggingService.LogInformation("Retrieved {Count} total logs for tree building", allLogsList.Count);
 
                     var serviceLogs = allLogsList.Where(log =>
                         !IsWindowsLog(log) &&
                         !log.Equals("All", StringComparison.OrdinalIgnoreCase))
                         .ToList();
 
-                    _loggingService.LogInformation("Found {Count} service logs to process (after Event Viewer filtering)", serviceLogs.Count);
+                    _loggingService.LogInformation("Found {Count} service logs to process", serviceLogs.Count);
 
                     if (serviceLogs.Any())
                     {
                         BuildServiceLogTree(appsServicesLogs, serviceLogs);
                         root.Children.Add(appsServicesLogs);
 
-                        _loggingService.LogInformation("Successfully built service log tree with {Count} categories (AMSI and other internal logs filtered out)",
+                        _loggingService.LogInformation("Successfully built service log tree with {Count} categories",
                             appsServicesLogs.Children.Count);
                     }
                     else
                     {
-                        _loggingService.LogWarning("No service logs found after filtering, adding empty folder");
+                        _loggingService.LogWarning("No service logs found, adding empty folder");
                         root.Children.Add(appsServicesLogs);
                     }
                 }
@@ -109,18 +109,8 @@ namespace ZViewer.Services
             return root;
         }
 
-        private static bool IsWindowsLog(string logName)
-        {
-            return logName.Equals("Application", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("Security", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("Setup", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("System", StringComparison.OrdinalIgnoreCase);
-        }
-
-        // UPDATED METHOD: Now works with pre-filtered logs from EventLogService
         private static void BuildServiceLogTree(LogTreeItem parent, List<string> logs)
         {
-            // Since EventLogService now filters properly, we don't need to be as aggressive here
             var grouped = logs
                 .Where(log => log.Contains('-') || log.Contains('/'))
                 .GroupBy(log => GetTopLevelCategory(log))
@@ -139,6 +129,7 @@ namespace ZViewer.Services
 
                     var windowsLogs = group
                         .Where(log => log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(log => log) // Sort alphabetically
                         .ToList();
 
                     if (windowsLogs.Any())
@@ -150,74 +141,38 @@ namespace ZViewer.Services
                             IsExpanded = false
                         };
 
-                        // Group Windows logs by component for better organization
-                        var windowsComponents = windowsLogs
-                            .GroupBy(log => ExtractWindowsComponent(log))
-                            .OrderBy(g => g.Key)
-                            .Take(30); // Reasonable limit
-
-                        foreach (var component in windowsComponents)
+                        // REMOVE THE .Take(50) LIMIT - show all filtered logs
+                        foreach (var log in windowsLogs)
                         {
-                            if (component.Count() == 1)
+                            var displayName = GetWindowsLogDisplayName(log);
+                            windowsFolder.Children.Add(new LogTreeItem
                             {
-                                // Single log - add directly
-                                var log = component.First();
-                                var displayName = GetWindowsLogDisplayName(log);
-                                windowsFolder.Children.Add(new LogTreeItem
-                                {
-                                    Name = displayName,
-                                    Tag = log
-                                });
-                            }
-                            else
-                            {
-                                // Multiple logs - create component folder
-                                var componentFolder = new LogTreeItem
-                                {
-                                    Name = component.Key,
-                                    IsFolder = true,
-                                    IsExpanded = false
-                                };
-
-                                foreach (var log in component.Take(10)) // Limit per component
-                                {
-                                    var displayName = GetWindowsLogDisplayName(log);
-                                    componentFolder.Children.Add(new LogTreeItem
-                                    {
-                                        Name = displayName,
-                                        Tag = log
-                                    });
-                                }
-
-                                windowsFolder.Children.Add(componentFolder);
-                            }
+                                Name = displayName,
+                                Tag = log
+                            });
                         }
 
                         microsoftFolder.Children.Add(windowsFolder);
                     }
 
-                    // Add other Microsoft logs (non-Windows)
+                    // Handle other Microsoft logs (non-Windows)
                     var otherMicrosoftLogs = group
                         .Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
                         .OrderBy(log => log)
-                        .Take(20);
+                        .ToList();
 
                     foreach (var log in otherMicrosoftLogs)
                     {
-                        var displayName = GetLogDisplayName(log);
                         microsoftFolder.Children.Add(new LogTreeItem
                         {
-                            Name = displayName,
+                            Name = GetLogDisplayName(log),
                             Tag = log
                         });
                     }
 
-                    if (microsoftFolder.Children.Any())
-                    {
-                        parent.Children.Add(microsoftFolder);
-                    }
+                    parent.Children.Add(microsoftFolder);
                 }
-                else if (group.Count() <= 15) // Show reasonable-sized categories
+                else if (group.Count() <= 20) // Increased from 10 to be less restrictive
                 {
                     var categoryFolder = new LogTreeItem
                     {
@@ -226,7 +181,7 @@ namespace ZViewer.Services
                         IsExpanded = false
                     };
 
-                    foreach (var log in group.Take(15))
+                    foreach (var log in group.OrderBy(log => log))
                     {
                         categoryFolder.Children.Add(new LogTreeItem
                         {
@@ -237,14 +192,68 @@ namespace ZViewer.Services
 
                     parent.Children.Add(categoryFolder);
                 }
+                else
+                {
+                    // For categories with too many logs, create subcategories
+                    var categoryFolder = new LogTreeItem
+                    {
+                        Name = group.Key,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    var subgroups = group
+                        .GroupBy(log => GetSubCategory(log))
+                        .Where(sg => sg.Count() <= 15) // Only show reasonable subcategories
+                        .OrderBy(sg => sg.Key);
+
+                    foreach (var subgroup in subgroups)
+                    {
+                        if (subgroup.Count() == 1)
+                        {
+                            // Single item, add directly
+                            categoryFolder.Children.Add(new LogTreeItem
+                            {
+                                Name = GetLogDisplayName(subgroup.First()),
+                                Tag = subgroup.First()
+                            });
+                        }
+                        else
+                        {
+                            // Multiple items, create subfolder
+                            var subFolder = new LogTreeItem
+                            {
+                                Name = subgroup.Key,
+                                IsFolder = true,
+                                IsExpanded = false
+                            };
+
+                            foreach (var log in subgroup.OrderBy(log => log))
+                            {
+                                subFolder.Children.Add(new LogTreeItem
+                                {
+                                    Name = GetLogDisplayName(log),
+                                    Tag = log
+                                });
+                            }
+
+                            categoryFolder.Children.Add(subFolder);
+                        }
+                    }
+
+                    if (categoryFolder.Children.Any())
+                    {
+                        parent.Children.Add(categoryFolder);
+                    }
+                }
             }
 
             // Add standalone logs (those without clear categorization)
             var standaloneLogs = logs
                 .Where(log => !log.Contains('-') && !log.Contains('/'))
                 .Where(log => !IsWindowsLog(log))
-                .Take(25) // Increased limit since logs are pre-filtered
-                .OrderBy(log => log);
+                .OrderBy(log => log)
+                .ToList();
 
             foreach (var log in standaloneLogs)
             {
@@ -254,6 +263,32 @@ namespace ZViewer.Services
                     Tag = log
                 });
             }
+        }
+
+        private static string GetSubCategory(string logName)
+        {
+            // Extract a meaningful subcategory from the log name
+            var parts = logName.Split('-', '/');
+
+            if (parts.Length >= 3)
+            {
+                return parts[2]; // Usually the component name
+            }
+
+            if (parts.Length >= 2)
+            {
+                return parts[1];
+            }
+
+            return "Other";
+        }
+
+        private static bool IsWindowsLog(string logName)
+        {
+            return logName.Equals("Application", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("Security", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("Setup", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("System", StringComparison.OrdinalIgnoreCase);
         }
 
         // NEW HELPER METHODS for better organization

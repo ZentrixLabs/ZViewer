@@ -1,4 +1,5 @@
 ﻿using ZViewer.Models;
+using System.Diagnostics.Eventing.Reader;
 
 namespace ZViewer.Services
 {
@@ -11,6 +12,301 @@ namespace ZViewer.Services
         {
             _loggingService = loggingService;
             _errorService = errorService;
+        }
+
+        private static bool ShouldShowLog(string logName, EventLogInformation logInfo)
+        {
+            try
+            {
+                // Get log type from the log name/path
+                var logType = GetLogType(logName);
+
+                // Always hide Debug logs (LogType 3)
+                if (logType == 3)
+                {
+                    return false;
+                }
+
+                // Always hide Analytic logs (LogType 2) unless they're important operational logs
+                if (logType == 2 && !IsImportantAnalyticLog(logName))
+                {
+                    return false;
+                }
+
+                // For empty logs, only hide Admin logs (LogType 0) that are empty
+                // Keep Operational logs (LogType 1) even if empty
+                if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value == 0)
+                {
+                    if (logType == 0) // Admin logs - hide if empty
+                    {
+                        return false;
+                    }
+                    // Don't hide Operational logs even if empty - they might receive events later
+                }
+
+                return true;
+            }
+            catch (Exception)
+            {
+                // If we can't determine, default to showing it
+                return true;
+            }
+        }
+
+        private static int GetLogType(string logName)
+        {
+            // Determine log type based on the log name suffix
+            if (logName.EndsWith("/Debug", StringComparison.OrdinalIgnoreCase) ||
+                logName.EndsWith("-Debug", StringComparison.OrdinalIgnoreCase))
+            {
+                return 3; // Debug
+            }
+
+            if (logName.EndsWith("/Analytic", StringComparison.OrdinalIgnoreCase) ||
+                logName.EndsWith("-Analytic", StringComparison.OrdinalIgnoreCase))
+            {
+                return 2; // Analytic
+            }
+
+            if (logName.EndsWith("/Admin", StringComparison.OrdinalIgnoreCase) ||
+                logName.EndsWith("-Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                return 0; // Admin
+            }
+
+            if (logName.EndsWith("/Operational", StringComparison.OrdinalIgnoreCase) ||
+                logName.EndsWith("-Operational", StringComparison.OrdinalIgnoreCase))
+            {
+                return 1; // Operational
+            }
+
+            // Default to Operational for unclear cases
+            return 1;
+        }
+
+        private static bool IsImportantAnalyticLog(string logName)
+        {
+            // These analytic logs should be shown even though they're typically hidden
+            var importantAnalyticLogs = new[]
+            {
+                "Microsoft-Windows-FileInfoMinifilter/Operational",
+                "Microsoft-Windows-Firewall-CPL/Diagnostic",
+                "Microsoft-Windows-AppModel-State/Diagnostic",
+                "Microsoft-Windows-StateRepository/Diagnostic"
+                // Add more as needed based on your EventViewerVisibleLogs.json
+            };
+
+            return importantAnalyticLogs.Any(important =>
+                logName.Equals(important, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // SINGLE GetAvailableLogsAsync method with proper Event Viewer filtering
+        public async Task<IEnumerable<string>> GetAvailableLogsAsync()
+        {
+            return await Task.Run(() =>
+            {
+                var logs = new List<string>();
+
+                try
+                {
+                    _loggingService.LogInformation("Starting to enumerate event logs with Event Viewer filtering...");
+
+                    using var session = new EventLogSession();
+                    var logNames = session.GetLogNames().ToList();
+
+                    _loggingService.LogInformation("Found {Count} total log names to process", logNames.Count);
+
+                    int processed = 0;
+                    int successful = 0;
+                    int filtered = 0;
+                    int accessDenied = 0;
+                    int otherErrors = 0;
+
+                    foreach (string logName in logNames)
+                    {
+                        try
+                        {
+                            processed++;
+
+                            // Get log information for filtering
+                            var logInfo = session.GetLogInformation(logName, PathType.LogName);
+
+                            // Apply Event Viewer's filtering logic
+                            if (!ShouldShowInEventViewer(logName, logInfo))
+                            {
+                                filtered++;
+                                continue;
+                            }
+
+                            // Try to access the log to ensure it's readable
+                            try
+                            {
+                                var logQuery = new EventLogQuery(logName, PathType.LogName);
+                                using var reader = new EventLogReader(logQuery);
+                                reader.ReadEvent(); // Test read
+
+                                logs.Add(logName);
+                                successful++;
+
+                                if (successful % 50 == 0)
+                                {
+                                    _loggingService.LogInformation("Processed {Successful} valid logs so far...", successful);
+                                }
+                            }
+                            catch (UnauthorizedAccessException)
+                            {
+                                accessDenied++;
+                                continue;
+                            }
+                            catch
+                            {
+                                // If we can't read from it, skip it
+                                otherErrors++;
+                                continue;
+                            }
+                        }
+                        catch (UnauthorizedAccessException)
+                        {
+                            accessDenied++;
+                            if (accessDenied <= 5) // Only log first few to avoid spam
+                            {
+                                _loggingService.LogWarning("Access denied to log: {LogName}", logName);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            otherErrors++;
+                            if (otherErrors <= 10) // Only log first few to avoid spam
+                            {
+                                _loggingService.LogWarning("Failed to access log {LogName}: {Error}", logName, ex.Message);
+                            }
+                        }
+
+                        // Log progress every 200 logs
+                        if (processed % 200 == 0)
+                        {
+                            _loggingService.LogInformation("Enumeration progress: {Processed}/{Total} processed, {Successful} included, {Filtered} filtered, {AccessDenied} access denied",
+                                processed, logNames.Count, successful, filtered, accessDenied);
+                        }
+                    }
+
+                    _loggingService.LogInformation("Log enumeration complete: {Successful}/{Total} logs included, {Filtered} filtered out, {AccessDenied} access denied",
+                        successful, processed, filtered, accessDenied);
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogError(ex, "Failed to enumerate event logs completely");
+
+                    // Fallback to basic Windows logs if enumeration fails completely
+                    if (logs.Count == 0)
+                    {
+                        _loggingService.LogWarning("Using fallback log list due to enumeration failure");
+                        logs.AddRange(new[] { "Application", "System", "Security", "Setup" });
+                    }
+                }
+
+                var sortedLogs = logs.OrderBy(x => x).ToList();
+                _loggingService.LogInformation("Returning {Count} filtered logs (Event Viewer compatible)", sortedLogs.Count);
+
+                return sortedLogs;
+            });
+        }
+
+        // NEW FILTERING METHODS - This is the key fix!
+        private static bool ShouldShowInEventViewer(string logName, EventLogInformation logInfo)
+        {
+            // Standard Windows logs always show
+            if (IsStandardWindowsLog(logName))
+                return true;
+
+            // Empty logs typically don't show unless they're important
+            if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value == 0)
+            {
+                if (IsImportantEmptyLog(logName))
+                    return true;
+                return false;
+            }
+
+            // Debug and Analytic logs are hidden by default in Event Viewer
+            if (logName.Contains("/Debug", StringComparison.OrdinalIgnoreCase) ||
+                logName.Contains("/Analytic", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // System-internal logs like AMSI are typically hidden - THIS FIXES THE AMSI ISSUE!
+            if (IsSystemInternalLog(logName))
+                return false;
+
+            // Additional filtering for very technical logs that Event Viewer typically hides
+            if (IsVeryTechnicalLog(logName))
+                return false;
+
+            return true;
+        }
+
+        private static bool IsStandardWindowsLog(string logName)
+        {
+            return new[] { "Application", "Security", "Setup", "System", "ForwardedEvents" }
+                .Contains(logName, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static bool IsImportantEmptyLog(string logName)
+        {
+            // These logs show in Event Viewer even when empty because they're commonly used
+            var importantLogs = new[]
+            {
+                "Microsoft-Windows-PowerShell/Operational",
+                "Microsoft-Windows-Windows Defender/Operational",
+                "Microsoft-Windows-WindowsUpdateClient/Operational",
+                "Microsoft-Windows-GroupPolicy/Operational",
+                "Microsoft-Windows-TaskScheduler/Operational",
+                "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational",
+                "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational"
+            };
+
+            return importantLogs.Contains(logName, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSystemInternalLog(string logName)
+        {
+            // These are system-internal logs that Event Viewer typically hides
+            // THIS IS WHERE WE FILTER OUT AMSI!
+            var internalPatterns = new[]
+            {
+                "Microsoft-Antimalware-Scan-Interface",  // AMSI logs - THE FIX!
+                "AMSI",                                  // Alternative AMSI naming
+                "Microsoft-Windows-Kernel-",             // Low-level kernel logs
+                "Microsoft-Windows-WDAG-",               // Windows Defender Application Guard
+                "Microsoft-Windows-Hyper-V-",            // Hyper-V internal logs
+                "Microsoft-Windows-Runtime-",            // Runtime internals
+                "Microsoft-Windows-Subsystem-",          // Subsystem internals
+                "Microsoft-Windows-Security-Mitigations", // Security internals
+                "Microsoft-Windows-WER-",                // Windows Error Reporting internals
+                "Microsoft-Windows-Dwm-",                // Desktop Window Manager internals
+            };
+
+            return internalPatterns.Any(pattern =>
+                logName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsVeryTechnicalLog(string logName)
+        {
+            // Additional patterns for very technical logs that clutter the UI
+            var technicalPatterns = new[]
+            {
+                "Microsoft-Windows-Wininit",
+                "Microsoft-Windows-Winlogon",
+                "Microsoft-Windows-User32",
+                "Microsoft-Windows-MMCSS",
+                "Microsoft-Windows-UserModePowerService",
+                "Microsoft-Windows-ProcessStateManager",
+                "Microsoft-Windows-Networking-Correlation",
+                "Microsoft-Windows-CoreSystem-SmsRouter",
+                "Microsoft-Windows-StateRepository",
+                "Microsoft-Windows-Shell-ConnectedAccountState"
+            };
+
+            return technicalPatterns.Any(pattern =>
+                logName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
         }
 
         // New paged loading method
@@ -249,215 +545,6 @@ namespace ZViewer.Services
             }
 
             return allEntries.OrderByDescending(e => e.TimeCreated);
-        }
-
-        // UPDATED METHOD with Event Viewer filtering
-        public async Task<IEnumerable<string>> GetAvailableLogsAsync()
-        {
-            return await Task.Run(() =>
-            {
-                var logs = new List<string>();
-
-                try
-                {
-                    _loggingService.LogInformation("Starting to enumerate event logs with Event Viewer filtering...");
-
-                    using var session = new EventLogSession();
-                    var logNames = session.GetLogNames().ToList();
-
-                    _loggingService.LogInformation("Found {Count} total log names to process", logNames.Count);
-
-                    int processed = 0;
-                    int successful = 0;
-                    int filtered = 0;
-                    int accessDenied = 0;
-                    int otherErrors = 0;
-
-                    foreach (string logName in logNames)
-                    {
-                        try
-                        {
-                            processed++;
-
-                            // Get log information for filtering
-                            var logInfo = session.GetLogInformation(logName, PathType.LogName);
-
-                            // Apply Event Viewer's filtering logic
-                            if (!ShouldShowInEventViewer(logName, logInfo))
-                            {
-                                filtered++;
-                                continue;
-                            }
-
-                            // Try to access the log to ensure it's readable
-                            try
-                            {
-                                var logQuery = new EventLogQuery(logName, PathType.LogName);
-                                using var reader = new EventLogReader(logQuery);
-                                reader.ReadEvent(); // Test read
-
-                                logs.Add(logName);
-                                successful++;
-
-                                if (successful % 50 == 0)
-                                {
-                                    _loggingService.LogInformation("Processed {Successful} valid logs so far...", successful);
-                                }
-                            }
-                            catch (UnauthorizedAccessException)
-                            {
-                                accessDenied++;
-                                continue;
-                            }
-                            catch
-                            {
-                                // If we can't read from it, skip it
-                                otherErrors++;
-                                continue;
-                            }
-                        }
-                        catch (UnauthorizedAccessException)
-                        {
-                            accessDenied++;
-                            if (accessDenied <= 5) // Only log first few to avoid spam
-                            {
-                                _loggingService.LogWarning("Access denied to log: {LogName}", logName);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            otherErrors++;
-                            if (otherErrors <= 10) // Only log first few to avoid spam
-                            {
-                                _loggingService.LogWarning("Failed to access log {LogName}: {Error}", logName, ex.Message);
-                            }
-                        }
-
-                        // Log progress every 200 logs
-                        if (processed % 200 == 0)
-                        {
-                            _loggingService.LogInformation("Enumeration progress: {Processed}/{Total} processed, {Successful} included, {Filtered} filtered, {AccessDenied} access denied",
-                                processed, logNames.Count, successful, filtered, accessDenied);
-                        }
-                    }
-
-                    _loggingService.LogInformation("Log enumeration complete: {Successful}/{Total} logs included, {Filtered} filtered out, {AccessDenied} access denied",
-                        successful, processed, filtered, accessDenied);
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogError(ex, "Failed to enumerate event logs completely");
-
-                    // Fallback to basic Windows logs if enumeration fails completely
-                    if (logs.Count == 0)
-                    {
-                        _loggingService.LogWarning("Using fallback log list due to enumeration failure");
-                        logs.AddRange(new[] { "Application", "System", "Security", "Setup" });
-                    }
-                }
-
-                var sortedLogs = logs.OrderBy(x => x).ToList();
-                _loggingService.LogInformation("Returning {Count} filtered logs (Event Viewer compatible)", sortedLogs.Count);
-
-                return sortedLogs;
-            });
-        }
-
-        // NEW FILTERING METHODS - This is the key fix!
-        private static bool ShouldShowInEventViewer(string logName, EventLogInformation logInfo)
-        {
-            // Standard Windows logs always show
-            if (IsStandardWindowsLog(logName))
-                return true;
-
-            // Empty logs typically don't show unless they're important
-            if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value == 0)
-            {
-                if (IsImportantEmptyLog(logName))
-                    return true;
-                return false;
-            }
-
-            // Debug and Analytic logs are hidden by default in Event Viewer
-            if (logName.Contains("/Debug", StringComparison.OrdinalIgnoreCase) ||
-                logName.Contains("/Analytic", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            // System-internal logs like AMSI are typically hidden - THIS FIXES THE AMSI ISSUE!
-            if (IsSystemInternalLog(logName))
-                return false;
-
-            // Additional filtering for very technical logs that Event Viewer typically hides
-            if (IsVeryTechnicalLog(logName))
-                return false;
-
-            return true;
-        }
-
-        private static bool IsStandardWindowsLog(string logName)
-        {
-            return new[] { "Application", "Security", "Setup", "System", "ForwardedEvents" }
-                .Contains(logName, StringComparer.OrdinalIgnoreCase);
-        }
-
-        private static bool IsImportantEmptyLog(string logName)
-        {
-            // These logs show in Event Viewer even when empty because they're commonly used
-            var importantLogs = new[]
-            {
-                "Microsoft-Windows-PowerShell/Operational",
-                "Microsoft-Windows-Windows Defender/Operational",
-                "Microsoft-Windows-WindowsUpdateClient/Operational",
-                "Microsoft-Windows-GroupPolicy/Operational",
-                "Microsoft-Windows-TaskScheduler/Operational",
-                "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational",
-                "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational"
-            };
-
-            return importantLogs.Contains(logName, StringComparer.OrdinalIgnoreCase);
-        }
-
-        private static bool IsSystemInternalLog(string logName)
-        {
-            // These are system-internal logs that Event Viewer typically hides
-            // THIS IS WHERE WE FILTER OUT AMSI!
-            var internalPatterns = new[]
-            {
-                "Microsoft-Antimalware-Scan-Interface",  // AMSI logs - THE FIX!
-                "AMSI",                                  // Alternative AMSI naming
-                "Microsoft-Windows-Kernel-",             // Low-level kernel logs
-                "Microsoft-Windows-WDAG-",               // Windows Defender Application Guard
-                "Microsoft-Windows-Hyper-V-",            // Hyper-V internal logs
-                "Microsoft-Windows-Runtime-",            // Runtime internals
-                "Microsoft-Windows-Subsystem-",          // Subsystem internals
-                "Microsoft-Windows-Security-Mitigations", // Security internals
-                "Microsoft-Windows-WER-",                // Windows Error Reporting internals
-                "Microsoft-Windows-Dwm-",                // Desktop Window Manager internals
-            };
-
-            return internalPatterns.Any(pattern =>
-                logName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private static bool IsVeryTechnicalLog(string logName)
-        {
-            // Additional patterns for very technical logs that clutter the UI
-            var technicalPatterns = new[]
-            {
-                "Microsoft-Windows-Wininit",
-                "Microsoft-Windows-Winlogon",
-                "Microsoft-Windows-User32",
-                "Microsoft-Windows-MMCSS",
-                "Microsoft-Windows-UserModePowerService",
-                "Microsoft-Windows-ProcessStateManager",
-                "Microsoft-Windows-Networking-Correlation",
-                "Microsoft-Windows-CoreSystem-SmsRouter",
-                "Microsoft-Windows-StateRepository",
-                "Microsoft-Windows-Shell-ConnectedAccountState"
-            };
-
-            return technicalPatterns.Any(pattern =>
-                logName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
         }
 
         // Existing helper methods unchanged

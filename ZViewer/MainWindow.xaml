@@ -6,25 +6,34 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- Menu Bar -->
+        <Menu Grid.Row="0" Background="#F8F9FA" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Close" Click="Close_Click" InputGestureText="Alt+F4"/>
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About ZViewer..." Click="About_Click"/>
+            </MenuItem>
+        </Menu>
+        
         <!-- Toolbar -->
-        <Border Grid.Row="0" Background="#F0F0F0" Padding="10,5">
+        <Border Grid.Row="1" Background="#F0F0F0" Padding="10,5">
             <StackPanel Orientation="Horizontal">
                 <Button Content="🔄 Refresh" Width="80" Height="30" 
                         Margin="0,0,10,0" Command="{Binding RefreshCommand}"/>
-                <Button Content="📁 Export" Width="80" Height="30" 
-                        Margin="0,0,10,0" Command="{Binding ExportCommand}"/>
-                <ProgressBar Width="200" Height="20" Margin="20,0,0,0" 
+                <ProgressBar Width="auto" Height="20" Margin="150,0,0,0"
                             Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
                             IsIndeterminate="True"/>
             </StackPanel>
         </Border>
 
         <!-- Main Content Area -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="250"/>
                 <ColumnDefinition Width="5"/>
@@ -229,7 +238,7 @@
         </Grid>
 
         <!-- Status Bar -->
-        <Border Grid.Row="2" Background="#F0F0F0" Padding="10,5">
+        <Border Grid.Row="3" Background="#F0F0F0" Padding="10,5">
             <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"/>
         </Border>
     </Grid>

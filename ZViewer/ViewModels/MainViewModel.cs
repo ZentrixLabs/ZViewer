@@ -68,14 +68,17 @@ namespace ZViewer.ViewModels
 
         }
 
-        public async Task ShowPropertiesAsync()
+        public async Task ShowPropertiesAsync(Window? owner = null)
         {
             try
             {
                 var logName = _currentLogFilter == "All" ? "Application" : _currentLogFilter;
                 var properties = await _logPropertiesService.GetLogPropertiesAsync(logName);
 
-                var dialog = new Views.LogPropertiesDialog(properties);
+                var dialog = new Views.LogPropertiesDialog(properties, _logPropertiesService)
+                {
+                    Owner = owner
+                };
                 dialog.ShowDialog();
             }
             catch (Exception ex)

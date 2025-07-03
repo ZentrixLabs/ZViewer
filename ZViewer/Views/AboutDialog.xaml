@@ -1,0 +1,45 @@
+﻿<Window x:Class="ZViewer.Views.AboutDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="About ZViewer" Height="300" Width="400"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Application Icon/Title -->
+        <TextBlock Grid.Row="0" Text="ZViewer" FontSize="24" FontWeight="Bold" 
+                   HorizontalAlignment="Center" Margin="0,0,0,10"/>
+
+        <!-- Version -->
+        <TextBlock Grid.Row="1" Text="Enhanced Event Log Viewer" FontSize="14" 
+                   HorizontalAlignment="Center" Margin="0,0,0,5"/>
+
+        <TextBlock Grid.Row="2" Text="Version 1.0" FontSize="12" 
+                   HorizontalAlignment="Center" Margin="0,0,0,15"/>
+
+        <!-- Description -->
+        <TextBlock Grid.Row="3" TextWrapping="Wrap" HorizontalAlignment="Center" Margin="0,0,0,15">
+            <Run Text="A modern, high-performance replacement for Windows Event Viewer."/>
+            <LineBreak/>
+            <LineBreak/>
+            <Run Text="Built with .NET 9 and WPF for superior performance and usability."/>
+        </TextBlock>
+
+        <!-- Copyright -->
+        <TextBlock Grid.Row="4" Text="© 2025 ZentrixLabs" FontSize="11" 
+                   HorizontalAlignment="Center" VerticalAlignment="Bottom" 
+                   Foreground="Gray" Margin="0,0,0,15"/>
+
+        <!-- OK Button -->
+        <Button Grid.Row="5" Content="OK" Width="75" Height="25" 
+                HorizontalAlignment="Center" IsDefault="True" Click="OK_Click"/>
+    </Grid>
+</Window>

@@ -125,7 +125,7 @@ namespace ZViewer.Services
             {
                 try
                 {
-                    var eventLog = new EventLogSession().GetLogInformation(logName);
+                    var eventLog = new EventLogSession().GetLogInformation(logName, PathType.LogName);
                     if (eventLog.RecordCount == 0)
                     {
                         _errorService.HandleError("The log is already empty.", "Clear Log");

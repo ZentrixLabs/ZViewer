@@ -9,6 +9,21 @@ namespace ZViewer
             InitializeComponent();
             DataContext = viewModel;
         }
+
+        private void Close_Click(object sender, RoutedEventArgs e)
+        {
+            Close();
+        }
+
+        private void About_Click(object sender, RoutedEventArgs e)
+        {
+            var aboutDialog = new Views.AboutDialog()
+            {
+                Owner = this
+            };
+            aboutDialog.ShowDialog();
+        }
+
         private void SaveAllEvents_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is MainViewModel viewModel)
@@ -21,7 +36,7 @@ namespace ZViewer
         {
             if (DataContext is MainViewModel viewModel)
             {
-                await viewModel.ShowPropertiesAsync();
+                await viewModel.ShowPropertiesAsync(this);
             }
         }
 
@@ -47,7 +62,7 @@ namespace ZViewer
         {
             if (DataContext is MainViewModel viewModel)
             {
-                viewModel.ShowFilterDialogCommand.Execute(null);
+                viewModel.ShowFilterDialogCommand.Execute(this);
             }
         }
 

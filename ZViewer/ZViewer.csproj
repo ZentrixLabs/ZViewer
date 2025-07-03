@@ -7,16 +7,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
 	<ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWPF>true</UseWPF>
+
+	<!-- Application Icon -->
+	<ApplicationIcon>Assets\ZViewer.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <None Remove="Assets\ZentrixLabs_Logo.png" />
+	<None Remove="Assets\ZViewer.ico" />
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="Assets\ZentrixLabs_Logo.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+	<Content Include="Assets\ZViewer.ico">
+	 <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	</Content>
   </ItemGroup>
 
   <ItemGroup>

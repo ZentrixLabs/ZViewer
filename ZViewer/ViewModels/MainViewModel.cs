@@ -56,7 +56,7 @@ namespace ZViewer.ViewModels
             ExportCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Export functionality coming soon!")); // Add this line
             SaveAllEventsCommand = new RelayCommand(async () => await SaveAllEventsAsync());
             SaveFilteredEventsCommand = new RelayCommand(async () => await SaveFilteredEventsAsync());
-            ShowFilterDialogCommand = new RelayCommand(ShowFilterDialog);
+            ShowFilterDialogCommand = new RelayCommand<Window>(ShowFilterDialog);
             ClearFilterCommand = new RelayCommand(ClearFilter);
             LogSelectedCommand = new RelayCommand<string>(OnLogSelected);
 
@@ -207,9 +207,13 @@ namespace ZViewer.ViewModels
             StatusText = $"Filter cleared - showing {displayCount} events";
         }
 
-        private void ShowFilterDialog()
+        private void ShowFilterDialog(Window? owner)
         {
-            var filterDialog = new Views.FilterDialog();
+            var filterDialog = new Views.FilterDialog()
+            {
+                Owner = owner
+            };
+
             if (filterDialog.ShowDialog() == true && filterDialog.FilterCriteria != null)
             {
                 _currentFilter = filterDialog.FilterCriteria;

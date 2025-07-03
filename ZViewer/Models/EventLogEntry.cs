@@ -15,5 +15,6 @@ namespace ZViewer.Models
         public int EventId { get; set; }
         public string TaskCategory { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
+        public string RawXml { get; set; } = string.Empty;
     }
 }

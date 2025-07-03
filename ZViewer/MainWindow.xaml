@@ -72,7 +72,9 @@
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="2*"/>
+                    <RowDefinition Height="5"/>
+                    <RowDefinition Height="1*"/>
                 </Grid.RowDefinitions>
 
                 <!-- Current Log Header -->
@@ -82,6 +84,7 @@
 
                 <!-- Data Grid -->
                 <DataGrid Grid.Row="1" ItemsSource="{Binding EventsView}"
+                          SelectedItem="{Binding SelectedEvent}"
                           AutoGenerateColumns="False" IsReadOnly="True"
                           GridLinesVisibility="Horizontal" HeadersVisibility="Column"
                           SelectionMode="Single" CanUserSortColumns="True"
@@ -113,6 +116,103 @@
                         </Style>
                     </DataGrid.RowStyle>
                 </DataGrid>
+
+                <!-- Horizontal Splitter -->
+                <GridSplitter Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#E0E0E0"/>
+
+                <!-- Event Details Panel -->
+                <Border Grid.Row="3" Background="White" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+                    <Grid Visibility="{Binding HasSelectedEvent, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Details Header -->
+                        <Border Grid.Row="0" Background="#F8F9FA" Padding="10,5" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+                            <TextBlock Text="Event Properties" FontWeight="Bold" FontSize="11"/>
+                        </Border>
+
+                        <!-- Tab Control -->
+                        <TabControl Grid.Row="1" Margin="5">
+                            <!-- General Tab -->
+                            <TabItem Header="General">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <Grid Margin="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Log Name:" FontWeight="Bold" Margin="0,0,10,5"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedEvent.LogName}" Margin="0,0,0,5"/>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Source:" FontWeight="Bold" Margin="0,0,10,5"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedEvent.Source}" Margin="0,0,0,5"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Event ID:" FontWeight="Bold" Margin="0,0,10,5"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedEvent.EventId}" Margin="0,0,0,5"/>
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Level:" FontWeight="Bold" Margin="0,0,10,5"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedEvent.Level}" Margin="0,0,0,5"/>
+
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Date and Time:" FontWeight="Bold" Margin="0,0,10,5"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SelectedEvent.TimeCreated, StringFormat='dddd, MMMM dd, yyyy h:mm:ss tt'}" Margin="0,0,0,5"/>
+
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Task Category:" FontWeight="Bold" Margin="0,0,10,10" VerticalAlignment="Top"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding SelectedEvent.TaskCategory}" Margin="0,0,0,10"/>
+
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Description:" FontWeight="Bold" Margin="0,0,10,10" VerticalAlignment="Top"/>
+                                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding SelectedEvent.Description, Mode=OneWay}" 
+                                                 IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                                 TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    </Grid>
+                                </ScrollViewer>
+                            </TabItem>
+
+                            <!-- Details Tab (XML) -->
+                            <TabItem Header="Details">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- XML View Options (like Event Viewer) -->
+                                    <Border Grid.Row="0" Background="#F8F9FA" Padding="5" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+                                        <StackPanel Orientation="Horizontal">
+                                            <RadioButton Content="Friendly View" IsEnabled="False" Margin="0,0,15,0"/>
+                                            <RadioButton Content="XML View" IsChecked="True"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- XML Content -->
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" 
+                      Background="White" Margin="5">
+                                        <TextBox Text="{Binding SelectedEventXml, Mode=OneWay}" 
+                     IsReadOnly="True" 
+                     BorderThickness="0"
+                     Background="White"
+                     FontFamily="Consolas"
+                     FontSize="11"
+                     TextWrapping="NoWrap"
+                     Margin="10"
+                     Foreground="#2E3440"/>
+                                    </ScrollViewer>
+                                </Grid>
+                            </TabItem>
+                        </TabControl>
+                    </Grid>
+                </Border>
             </Grid>
         </Grid>
 

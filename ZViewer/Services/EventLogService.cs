@@ -65,7 +65,9 @@ namespace ZViewer.Services
                                 Source = eventRecord.ProviderName ?? "Unknown",
                                 EventId = eventRecord.Id,
                                 TaskCategory = eventRecord.TaskDisplayName ?? eventRecord.Task?.ToString() ?? "None",
-                                Description = eventRecord.FormatDescription() ?? "No description available"
+                                Description = eventRecord.FormatDescription() ?? "No description available",
+                                RawXml = eventRecord.ToXml()
+
                             };
 
                             entries.Add(entry);

@@ -9,17 +9,25 @@ namespace ZViewer.ViewModels
         private readonly ILoggingService _loggingService;
         private readonly IErrorService _errorService;
         private readonly CollectionViewSource _collectionViewSource;
+        private EventLogEntryViewModel? _selectedEvent;
+        private readonly IXmlFormatterService _xmlFormatterService;
 
         private string _statusText = "Ready";
         private bool _isLoading;
         private string _currentLogFilter = "All";
         private string _currentLogDisplayText = "All Logs - Last 24 Hours";
+        public bool HasSelectedEvent => SelectedEvent != null;
+        public string SelectedEventXml => SelectedEvent?.RawXml != null
+            ? _xmlFormatterService.FormatXml(SelectedEvent.RawXml)
+            : "No event selected";
 
-        public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService, IErrorService errorService)
+
+        public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService, IErrorService errorService, IXmlFormatterService xmlFormatterService)
         {
             _eventLogService = eventLogService;
             _loggingService = loggingService;
             _errorService = errorService;
+            _xmlFormatterService = xmlFormatterService;
 
             EventEntries = new ObservableCollection<EventLogEntryViewModel>();
             _collectionViewSource = new CollectionViewSource { Source = EventEntries };
@@ -35,6 +43,7 @@ namespace ZViewer.ViewModels
 
             // Load initial data
             _ = LoadEventsAsync();
+
         }
 
         public ObservableCollection<EventLogEntryViewModel> EventEntries { get; }
@@ -111,6 +120,19 @@ namespace ZViewer.ViewModels
 
             var displayCount = EventsView.Cast<object>().Count();
             StatusText = $"Showing {displayCount} events";
+        }
+
+        public EventLogEntryViewModel? SelectedEvent
+        {
+            get => _selectedEvent;
+            set
+            {
+                if (SetProperty(ref _selectedEvent, value))
+                {
+                    OnPropertyChanged(nameof(HasSelectedEvent));
+                    OnPropertyChanged(nameof(SelectedEventXml));
+                }
+            }
         }
 
         private void ApplyCurrentFilter()

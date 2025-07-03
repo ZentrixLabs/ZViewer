@@ -57,7 +57,7 @@
   <rect x="215" y="355" width="82" height="8" fill="#37474F" rx="4"/>
   
   <!-- Large "Z" Letter -->
-  <path d="M 180 80 L 280 80 L 285 90 L 205 130 L 285 130 L 280 140 L 180 140 L 175 130 L 255 90 L 175 90 Z" 
+  <path d="M 206 80 L 306 80 L 311 90 L 231 130 L 311 130 L 306 140 L 206 140 L 201 130 L 281 90 L 201 90 Z" 
         fill="url(#zGradient)" 
         stroke="#0D47A1" 
         stroke-width="2" 

@@ -19,6 +19,8 @@ namespace ZViewer
                     services.AddSingleton<IErrorService, ErrorService>();
                     services.AddSingleton<IEventLogService, EventLogService>();
                     services.AddSingleton<IXmlFormatterService, XmlFormatterService>();
+                    services.AddSingleton<IExportService, ExportService>();
+
 
 
                     // ViewModels

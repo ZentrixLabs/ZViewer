@@ -19,5 +19,7 @@ namespace ZViewer.ViewModels
         public string TaskCategory => _model.TaskCategory;
         public string Description => _model.Description;
         public string RawXml => _model.RawXml;
+        public EventLogEntry GetModel() => _model;
+
     }
 }

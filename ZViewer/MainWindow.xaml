@@ -15,8 +15,6 @@
             <StackPanel Orientation="Horizontal">
                 <Button Content="🔄 Refresh" Width="80" Height="30" 
                         Margin="0,0,10,0" Command="{Binding RefreshCommand}"/>
-                <Button Content="🔍 Filter" Width="80" Height="30" 
-                        Margin="0,0,10,0" Command="{Binding FilterCommand}"/>
                 <Button Content="📁 Export" Width="80" Height="30" 
                         Margin="0,0,10,0" Command="{Binding ExportCommand}"/>
                 <ProgressBar Width="200" Height="20" Margin="20,0,0,0" 
@@ -47,6 +45,20 @@
                     <TreeView Grid.Row="1" Name="LogTreeView" Margin="5" 
                              SelectedItemChanged="LogTreeView_SelectedItemChanged"
                              BorderThickness="0">
+                        <TreeView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Filter Current Log..." Click="FilterCurrentLog_Click"/>
+                                <MenuItem Name="ClearFilterMenuItem" Header="Clear Filter" Click="ClearFilter_Click" 
+                                    Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                <Separator Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                <Separator/>
+                                <MenuItem Header="Save All Events As..." Click="SaveAllEvents_Click"/>
+                                <MenuItem Name="SaveFilteredMenuItem" Header="Save Filtered Log File As..." Click="SaveFilteredEvents_Click"
+                                    Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                <Separator/>
+                                <MenuItem Header="Properties" IsEnabled="False"/>
+                            </ContextMenu>
+                        </TreeView.ContextMenu>
                         <TreeView.Resources>
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="True"/>

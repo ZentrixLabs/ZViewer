@@ -21,9 +21,9 @@
     <Content Include="Assets\ZentrixLabs_Logo.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-	<Content Include="Assets\ZViewer.ico">
+	<Resource Include="Assets\ZViewer.ico">
 	 <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	</Content>
+	</Resource>
   </ItemGroup>
 
   <ItemGroup>

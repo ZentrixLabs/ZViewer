@@ -1,0 +1,10 @@
+﻿global using System;
+global using System.Collections.ObjectModel;
+global using System.ComponentModel;
+global using System.Diagnostics.Eventing.Reader;
+global using System.Linq;
+global using System.Runtime.CompilerServices;
+global using System.Threading.Tasks;
+global using System.Windows;
+global using System.Windows.Controls;
+global using System.Windows.Data;

@@ -59,16 +59,31 @@ namespace ZViewer.Services
 
                 try
                 {
+                    _loggingService.LogInformation("Starting to load service logs for tree...");
+
                     var allLogs = await _eventLogService.GetAvailableLogsAsync();
-                    var serviceLogs = allLogs.Where(log =>
+                    var allLogsList = allLogs.ToList();
+
+                    _loggingService.LogInformation("Retrieved {Count} total logs for tree building", allLogsList.Count);
+
+                    var serviceLogs = allLogsList.Where(log =>
                         !IsWindowsLog(log) &&
                         !log.Equals("All", StringComparison.OrdinalIgnoreCase))
-                        .Take(50) // Limit to prevent UI overload
                         .ToList();
+
+                    _loggingService.LogInformation("Found {Count} service logs to process", serviceLogs.Count);
 
                     if (serviceLogs.Any())
                     {
                         BuildServiceLogTree(appsServicesLogs, serviceLogs);
+                        root.Children.Add(appsServicesLogs);
+
+                        _loggingService.LogInformation("Successfully built service log tree with {Count} categories",
+                            appsServicesLogs.Children.Count);
+                    }
+                    else
+                    {
+                        _loggingService.LogWarning("No service logs found, adding empty folder");
                         root.Children.Add(appsServicesLogs);
                     }
                 }

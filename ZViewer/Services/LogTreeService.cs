@@ -127,50 +127,8 @@ namespace ZViewer.Services
                         IsExpanded = false
                     };
 
-                    var windowsLogs = group
-                        .Where(log => log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                        .OrderBy(log => log) // Sort alphabetically
-                        .ToList();
-
-                    if (windowsLogs.Any())
-                    {
-                        var windowsFolder = new LogTreeItem
-                        {
-                            Name = "Windows",
-                            IsFolder = true,
-                            IsExpanded = false
-                        };
-
-                        // REMOVE THE .Take(50) LIMIT - show all filtered logs
-                        foreach (var log in windowsLogs)
-                        {
-                            var displayName = GetWindowsLogDisplayName(log);
-                            windowsFolder.Children.Add(new LogTreeItem
-                            {
-                                Name = displayName,
-                                Tag = log
-                            });
-                        }
-
-                        microsoftFolder.Children.Add(windowsFolder);
-                    }
-
-                    // Handle other Microsoft logs (non-Windows)
-                    var otherMicrosoftLogs = group
-                        .Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                        .Where(log => ShouldShowNonWindowsMicrosoftLog(log))
-                        .OrderBy(log => log)
-                        .ToList();
-
-                    foreach (var log in otherMicrosoftLogs)
-                    {
-                        microsoftFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogDisplayName(log),
-                            Tag = log
-                        });
-                    }
-
+                    // Build Microsoft subcategories using the enhanced method
+                    BuildMicrosoftSubcategories(microsoftFolder, group.ToList());
                     parent.Children.Add(microsoftFolder);
                 }
                 else if (group.Count() <= 20) // Increased from 10 to be less restrictive
@@ -249,10 +207,14 @@ namespace ZViewer.Services
                 }
             }
 
-            // Add standalone logs (those without clear categorization)
+            // Add standalone logs (those without clear categorization OR specifically allowed)
             var standaloneLogs = logs
-                .Where(log => !log.Contains('-') && !log.Contains('/'))
-                .Where(log => !IsWindowsLog(log))
+                .Where(log =>
+                    // Traditional standalone logs (no dashes or slashes AND not Windows logs)
+                    (!log.Contains('-') && !log.Contains('/') && !IsWindowsLog(log)) ||
+                    // OR specifically allowed standalone logs (regardless of naming pattern)
+                    ShouldShowStandaloneLog(log))
+                .Distinct() // Remove duplicates in case a log matches both conditions
                 .OrderBy(log => log)
                 .ToList();
 
@@ -264,6 +226,104 @@ namespace ZViewer.Services
                     Tag = log
                 });
             }
+        }
+
+        private static void BuildMicrosoftSubcategories(LogTreeItem microsoftFolder, List<string> microsoftLogs)
+        {
+            // Group Microsoft logs by their subcategory
+            var subcategories = new Dictionary<string, List<string>>();
+
+            foreach (var log in microsoftLogs)
+            {
+                var subcategory = GetMicrosoftSubcategory(log);
+                if (!subcategories.ContainsKey(subcategory))
+                    subcategories[subcategory] = new List<string>();
+                subcategories[subcategory].Add(log);
+            }
+
+            foreach (var (subcategoryName, subcategoryLogs) in subcategories.OrderBy(x => x.Key))
+            {
+                if (subcategoryName == "Windows")
+                {
+                    // Special handling for Windows logs
+                    var windowsFolder = new LogTreeItem
+                    {
+                        Name = "Windows",
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in subcategoryLogs.OrderBy(log => log))
+                    {
+                        var displayName = GetWindowsLogDisplayName(log);
+                        windowsFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = displayName,
+                            Tag = log
+                        });
+                    }
+
+                    microsoftFolder.Children.Add(windowsFolder);
+                }
+                else if (subcategoryLogs.Count == 1)
+                {
+                    // Single log, add directly to Microsoft folder
+                    microsoftFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = GetLogDisplayName(subcategoryLogs[0]),
+                        Tag = subcategoryLogs[0]
+                    });
+                }
+                else
+                {
+                    // Multiple logs, create subfolder
+                    var subFolder = new LogTreeItem
+                    {
+                        Name = subcategoryName,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in subcategoryLogs.OrderBy(log => log))
+                    {
+                        subFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogDisplayName(log),
+                            Tag = log
+                        });
+                    }
+
+                    microsoftFolder.Children.Add(subFolder);
+                }
+            }
+        }
+
+        private static string GetMicrosoftSubcategory(string logName)
+        {
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                return "Windows";
+
+            // Extract the component name after "Microsoft-"
+            var withoutPrefix = logName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split(new[] { '-', '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length > 0)
+            {
+                // Map known categories to friendly names
+                return parts[0] switch
+                {
+                    "Client" when withoutPrefix.StartsWith("Client-Licensing") => "Client Licensing Platform",
+                    "IE" => "Internet Explorer",
+                    "IEFRAME" => "Internet Explorer Frame",
+                    "AppV" => "Application Virtualization",
+                    "OneCore" => "OneCore",
+                    "Office" => "Office",
+                    "WFP" => "Windows Filtering Platform",
+                    _ => parts[0]
+                };
+            }
+
+            return "Other";
         }
 
         private static string GetSubCategory(string logName)

@@ -1,4 +1,5 @@
 ﻿using System.Windows.Input;
+using ZViewer.Models;
 using ZViewer.Services;
 
 namespace ZViewer.ViewModels
@@ -34,8 +35,7 @@ namespace ZViewer.ViewModels
 
             // Commands
             RefreshCommand = new RelayCommand(async () => await RefreshAsync(), () => !IsLoading);
-            FilterCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Filtering functionality coming soon!"));
-            ExportCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Export functionality coming soon!"));
+            FilterCommand = new RelayCommand(ShowFilterDialog); ExportCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Export functionality coming soon!"));
             LogSelectedCommand = new RelayCommand<string>(OnLogSelected);
 
             // Subscribe to error service events
@@ -72,6 +72,49 @@ namespace ZViewer.ViewModels
         public ICommand ExportCommand { get; }
         public ICommand LogSelectedCommand { get; }
 
+        private void ShowFilterDialog()
+        {
+            var filterDialog = new Views.FilterDialog();
+            if (filterDialog.ShowDialog() == true && filterDialog.FilterCriteria != null)
+            {
+                ApplyFilter(filterDialog.FilterCriteria);
+            }
+        }
+
+        private void ApplyFilter(FilterCriteria criteria)
+        {
+            _collectionViewSource.View.Filter = obj =>
+            {
+                if (obj is not EventLogEntryViewModel entry) return false;
+
+                // Apply current log filter first
+                if (_currentLogFilter != "All" &&
+                    !entry.LogName.Equals(_currentLogFilter, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                // Level filter
+                if (!criteria.IncludeCritical && entry.Level == "Critical") return false;
+                if (!criteria.IncludeError && entry.Level == "Error") return false;
+                if (!criteria.IncludeWarning && entry.Level == "Warning") return false;
+                if (!criteria.IncludeInformation && entry.Level == "Information") return false;
+                if (!criteria.IncludeVerbose && entry.Level == "Verbose") return false;
+
+                // Event ID filter
+                if (!string.IsNullOrEmpty(criteria.EventIds) &&
+                    !criteria.EventIds.Contains("<All Event IDs>"))
+                {
+                    // Simple implementation - can be enhanced for ranges and exclusions
+                    var ids = criteria.EventIds.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    if (!ids.Any(id => id.Trim() == entry.EventId.ToString()))
+                        return false;
+                }
+
+                return true;
+            };
+
+            var filteredCount = _collectionViewSource.View.Cast<object>().Count();
+            StatusText = $"Filter applied - showing {filteredCount} events";
+        }
         private async Task LoadEventsAsync()
         {
             try

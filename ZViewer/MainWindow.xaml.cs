@@ -17,6 +17,14 @@ namespace ZViewer
             }
         }
 
+        private async void Properties_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainViewModel viewModel)
+            {
+                await viewModel.ShowPropertiesAsync();
+            }
+        }
+
         private void SaveFilteredEvents_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is MainViewModel viewModel)

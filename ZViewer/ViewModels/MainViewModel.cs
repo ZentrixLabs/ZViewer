@@ -17,6 +17,7 @@ namespace ZViewer.ViewModels
         private bool _isFilterApplied;
         private FilterCriteria? _currentFilter;
         private readonly IExportService _exportService;
+        private readonly ILogPropertiesService _logPropertiesService;
 
         private string _statusText = "Ready";
         private bool _isLoading;
@@ -37,13 +38,14 @@ namespace ZViewer.ViewModels
         public ICommand SaveFilteredEventsCommand { get; }
 
         public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService,
-            IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService)
+            IErrorService errorService, IXmlFormatterService xmlFormatterService, IExportService exportService, ILogPropertiesService logPropertiesService)
         {
             _eventLogService = eventLogService;
             _loggingService = loggingService;
             _errorService = errorService;
             _xmlFormatterService = xmlFormatterService;
             _exportService = exportService;
+            _logPropertiesService = logPropertiesService;
 
             EventEntries = new ObservableCollection<EventLogEntryViewModel>();
             _collectionViewSource = new CollectionViewSource { Source = EventEntries };
@@ -64,6 +66,22 @@ namespace ZViewer.ViewModels
             // Load initial data
             _ = LoadEventsAsync();
 
+        }
+
+        public async Task ShowPropertiesAsync()
+        {
+            try
+            {
+                var logName = _currentLogFilter == "All" ? "Application" : _currentLogFilter;
+                var properties = await _logPropertiesService.GetLogPropertiesAsync(logName);
+
+                var dialog = new Views.LogPropertiesDialog(properties);
+                dialog.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                _errorService.HandleError(ex, "Failed to show log properties");
+            }
         }
 
         private async Task SaveAllEventsAsync()

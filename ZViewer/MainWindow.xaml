@@ -56,7 +56,7 @@
                                 <MenuItem Name="SaveFilteredMenuItem" Header="Save Filtered Log File As..." Click="SaveFilteredEvents_Click"
                                     Visibility="{Binding IsFilterApplied, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 <Separator/>
-                                <MenuItem Header="Properties" IsEnabled="False"/>
+                                <MenuItem Header="Properties" Click="Properties_Click"/>
                             </ContextMenu>
                         </TreeView.ContextMenu>
                         <TreeView.Resources>

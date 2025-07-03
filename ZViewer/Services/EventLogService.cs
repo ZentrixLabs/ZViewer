@@ -1,5 +1,6 @@
 ﻿using ZViewer.Models;
 using System.Diagnostics.Eventing.Reader;
+using System.IO;
 
 namespace ZViewer.Services
 {
@@ -109,12 +110,16 @@ namespace ZViewer.Services
 
                 try
                 {
-                    _loggingService.LogInformation("Starting to enumerate event logs with Event Viewer filtering...");
+                    _loggingService.LogInformation("Starting to enumerate event logs from filesystem...");
 
-                    using var session = new EventLogSession();
-                    var logNames = session.GetLogNames().ToList();
+                    // Get logs from both API and filesystem
+                    var apiLogs = GetLogsFromEventLogAPI();
+                    var fileLogs = GetLogsFromFilesystem();
 
-                    _loggingService.LogInformation("Found {Count} total log names to process", logNames.Count);
+                    // Combine and deduplicate
+                    var allLogNames = apiLogs.Union(fileLogs).Distinct().ToList();
+
+                    _loggingService.LogInformation("Found {Count} total log names to process", allLogNames.Count);
 
                     int processed = 0;
                     int successful = 0;
@@ -122,17 +127,25 @@ namespace ZViewer.Services
                     int accessDenied = 0;
                     int otherErrors = 0;
 
-                    foreach (string logName in logNames)
+                    foreach (string logName in allLogNames)
                     {
                         try
                         {
                             processed++;
 
                             // Get log information for filtering
+                            using var session = new EventLogSession();
                             var logInfo = session.GetLogInformation(logName, PathType.LogName);
 
                             // Apply Event Viewer's filtering logic
                             if (!ShouldShowInEventViewer(logName, logInfo))
+                            {
+                                filtered++;
+                                continue;
+                            }
+
+                            // For filesystem-based logs, verify the file actually has content or is important
+                            if (fileLogs.Contains(logName) && !VerifyLogFileHasContent(logName, logInfo))
                             {
                                 filtered++;
                                 continue;
@@ -186,7 +199,7 @@ namespace ZViewer.Services
                         if (processed % 200 == 0)
                         {
                             _loggingService.LogInformation("Enumeration progress: {Processed}/{Total} processed, {Successful} included, {Filtered} filtered, {AccessDenied} access denied",
-                                processed, logNames.Count, successful, filtered, accessDenied);
+                                processed, allLogNames.Count, successful, filtered, accessDenied);
                         }
                     }
 
@@ -210,6 +223,102 @@ namespace ZViewer.Services
 
                 return sortedLogs;
             });
+        }
+
+        private List<string> GetLogsFromEventLogAPI()
+        {
+            var apiLogs = new List<string>();
+            try
+            {
+                using var session = new EventLogSession();
+                apiLogs.AddRange(session.GetLogNames());
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogWarning("Failed to get logs from Event Log API: {Error}", ex.Message);
+            }
+            return apiLogs;
+        }
+
+        private List<string> GetLogsFromFilesystem()
+        {
+            var fileLogs = new List<string>();
+            try
+            {
+                var logsDirectory = Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows",
+                    @"System32\Winevt\Logs");
+
+                if (Directory.Exists(logsDirectory))
+                {
+                    var logFiles = Directory.GetFiles(logsDirectory, "*.evtx")
+                        .Concat(Directory.GetFiles(logsDirectory, "*.etl"))
+                        .Where(file => new FileInfo(file).Length > 0) // Only include non-empty files
+                        .ToList();
+
+                    foreach (var filePath in logFiles)
+                    {
+                        var fileName = Path.GetFileNameWithoutExtension(filePath);
+                        // Convert filename back to log name (reverse the %4 encoding)
+                        var logName = fileName.Replace("%4", "/");
+                        fileLogs.Add(logName);
+                    }
+
+                    _loggingService.LogInformation("Found {Count} physical log files in {Directory}", logFiles.Count, logsDirectory);
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogWarning("Failed to enumerate log files: {Error}", ex.Message);
+            }
+            return fileLogs;
+        }
+
+        private bool VerifyLogFileHasContent(string logName, EventLogInformation logInfo)
+        {
+            // Always include standard Windows logs
+            if (IsStandardWindowsLog(logName))
+                return true;
+
+            // Always include important logs even if empty
+            if (IsImportantEmptyLog(logName))
+                return true;
+
+            // Include if it has records
+            if (logInfo.RecordCount.HasValue && logInfo.RecordCount.Value > 0)
+                return true;
+
+            // Check physical file size
+            try
+            {
+                var systemRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows";
+                var logsDirectory = Path.Combine(systemRoot, @"System32\Winevt\Logs");
+
+                // Try both possible file extensions and encodings
+                var possibleFiles = new[]
+                {
+                    Path.Combine(logsDirectory, $"{logName}.evtx"),
+                    Path.Combine(logsDirectory, $"{logName}.etl"),
+                    Path.Combine(logsDirectory, $"{logName.Replace("/", "%4")}.evtx"),
+                    Path.Combine(logsDirectory, $"{logName.Replace("/", "%4")}.etl")
+                };
+
+                foreach (var filePath in possibleFiles)
+                {
+                    if (File.Exists(filePath))
+                    {
+                        var fileInfo = new FileInfo(filePath);
+                        // Include if file is larger than just the header (typically > 64KB for real logs)
+                        return fileInfo.Length > 65536;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogWarning("Could not verify file size for {LogName}: {Error}", logName, ex.Message);
+            }
+
+            // Default to excluding if we can't verify
+            return false;
         }
 
         // NEW FILTERING METHODS - This is the key fix!

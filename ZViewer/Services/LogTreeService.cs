@@ -174,7 +174,7 @@ namespace ZViewer.Services
 
         private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
         {
-            // Group by component (e.g., "Kernel-PnP", "TaskScheduler", etc.)
+            // Group by component (e.g., "AppV", "Kernel-PnP", etc.)
             var componentGroups = windowsLogs
                 .GroupBy(log => GetWindowsComponent(log))
                 .OrderBy(g => g.Key);
@@ -185,16 +185,19 @@ namespace ZViewer.Services
 
                 if (componentLogs.Count == 1)
                 {
-                    // Single log, add directly
+                    // Single log, add directly with proper name
+                    var logName = componentLogs[0];
+                    var displayName = GetLogType(logName);
+
                     parent.Children.Add(new LogTreeItem
                     {
-                        Name = GetDisplayName(componentLogs[0]),
-                        Tag = componentLogs[0]
+                        Name = $"{componentGroup.Key} - {displayName}",
+                        Tag = logName
                     });
                 }
                 else
                 {
-                    // Multiple logs for this component, create a folder
+                    // Multiple logs for this component, create a folder structure
                     var componentFolder = new LogTreeItem
                     {
                         Name = componentGroup.Key,
@@ -202,13 +205,49 @@ namespace ZViewer.Services
                         IsExpanded = false
                     };
 
-                    foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
+                    // Group by sub-component if applicable
+                    var subComponentGroups = componentLogs
+                        .GroupBy(log => GetSubComponent(log))
+                        .OrderBy(g => g.Key);
+
+                    foreach (var subGroup in subComponentGroups)
                     {
-                        componentFolder.Children.Add(new LogTreeItem
+                        var subComponentLogs = subGroup.ToList();
+
+                        if (subComponentLogs.Count == 1)
                         {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
+                            // Single sub-component log
+                            var logName = subComponentLogs[0];
+                            var logType = GetLogType(logName);
+                            var displayName = subGroup.Key == componentGroup.Key ? logType : $"{subGroup.Key} - {logType}";
+
+                            componentFolder.Children.Add(new LogTreeItem
+                            {
+                                Name = displayName,
+                                Tag = logName
+                            });
+                        }
+                        else
+                        {
+                            // Multiple logs for this sub-component, create another folder
+                            var subComponentFolder = new LogTreeItem
+                            {
+                                Name = subGroup.Key,
+                                IsFolder = true,
+                                IsExpanded = false
+                            };
+
+                            foreach (var log in subComponentLogs.OrderBy(l => GetLogType(l)))
+                            {
+                                subComponentFolder.Children.Add(new LogTreeItem
+                                {
+                                    Name = GetLogType(log),
+                                    Tag = log
+                                });
+                            }
+
+                            componentFolder.Children.Add(subComponentFolder);
+                        }
                     }
 
                     parent.Children.Add(componentFolder);
@@ -277,6 +316,9 @@ namespace ZViewer.Services
         // Helper methods for parsing log names based on physical file structure
         private string GetTopLevelCategory(string logName)
         {
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                return "Microsoft";
+
             if (logName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
                 return "Microsoft";
 
@@ -298,7 +340,33 @@ namespace ZViewer.Services
             {
                 var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
                 var parts = withoutPrefix.Split('/');
-                return parts[0]; // Component name
+                var componentPart = parts[0];
+
+                // Handle multi-part components like "AppV-Client"
+                var componentParts = componentPart.Split('-');
+                return componentParts[0]; // Return first part (e.g., "AppV" from "AppV-Client")
+            }
+
+            return "Other";
+        }
+
+        private string GetSubComponent(string logName)
+        {
+            // Extract sub-component from Microsoft-Windows-Component-SubComponent/LogType
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+            {
+                var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
+                var parts = withoutPrefix.Split('/');
+                var componentPart = parts[0];
+
+                // Handle multi-part components like "AppV-Client"
+                var componentParts = componentPart.Split('-');
+                if (componentParts.Length > 1)
+                {
+                    return string.Join("-", componentParts.Skip(1)); // Return remaining parts (e.g., "Client" from "AppV-Client")
+                }
+
+                return componentParts[0]; // Return the component itself if no sub-component
             }
 
             return "Other";
@@ -313,15 +381,8 @@ namespace ZViewer.Services
 
         private string GetDisplayName(string logName)
         {
-            // Create a friendly display name
-            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-            {
-                var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
-                return withoutPrefix.Replace("/", " - ").Replace("-", " ");
-            }
-
-            // For other logs, just clean up the name
-            return logName.Replace("/", " - ").Replace("-", " ");
+            // Create a friendly display name - just return the log type since we handle hierarchy differently now
+            return GetLogType(logName);
         }
 
         private bool IsWindowsLog(string logName)

@@ -175,117 +175,138 @@ namespace ZViewer.Services
         private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
         {
             // Build a hierarchical structure by parsing the full component path
-            var logHierarchy = new Dictionary<string, List<string>>();
+            var componentGroups = new Dictionary<string, List<string>>();
 
             foreach (var log in windowsLogs)
             {
                 if (log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Parse: Microsoft-Windows-AppV-Client/Admin -> AppV-Client
+                    // Parse: Microsoft-Windows-AppV-Client/Admin -> ["AppV", "Client"]
                     var withoutPrefix = log.Substring("Microsoft-Windows-".Length);
                     var parts = withoutPrefix.Split('/');
-                    var componentPath = parts[0]; // e.g., "AppV-Client"
+                    var componentPath = parts[0]; // e.g., "AppV-Client" or "Application-Experience"
 
-                    if (!logHierarchy.ContainsKey(componentPath))
-                        logHierarchy[componentPath] = new List<string>();
+                    // Determine the main component based on known patterns
+                    var mainComponent = GetMainComponent(componentPath);
 
-                    logHierarchy[componentPath].Add(log);
+                    if (!componentGroups.ContainsKey(mainComponent))
+                        componentGroups[mainComponent] = new List<string>();
+
+                    componentGroups[mainComponent].Add(log);
                 }
             }
 
             // Now build the tree structure
-            foreach (var kvp in logHierarchy.OrderBy(x => x.Key))
+            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
             {
-                var componentPath = kvp.Key;
+                var mainComponent = kvp.Key;
                 var logs = kvp.Value;
 
-                BuildComponentHierarchy(parent, componentPath, logs);
+                BuildMainComponentFolder(parent, mainComponent, logs);
             }
         }
 
-        private void BuildComponentHierarchy(LogTreeItem parent, string componentPath, List<string> logs)
+        private string GetMainComponent(string componentPath)
         {
-            // Split component path into parts: "AppV-Client" -> ["AppV", "Client"]
-            var pathParts = componentPath.Split('-');
-
-            if (pathParts.Length == 1)
+            // Handle known multi-word components that should stay together
+            var knownComponents = new Dictionary<string, string[]>
             {
-                // Simple component like "TaskScheduler"
-                var componentName = pathParts[0];
+                ["Application"] = new[] { "Application-Experience", "Application Server" },
+                ["Storage"] = new[] { "Storage-ClassPnP", "Storage-Storport", "StorageManagement", "StorageSettings", "StorageSpaces" },
+                ["Security"] = new[] { "Security-Adminless", "Security-Audit", "Security-EnterpriseData", "Security-LessPrivilegedAppContainer", "Security-Mitigations", "Security-Netlogon", "Security-SPP", "Security-UserConsentVerifier" },
+                ["TerminalServices"] = new[] { "TerminalServices-ClientUSBDevices", "TerminalServices-LocalSessionManager", "TerminalServices-PnPDevices", "TerminalServices-Printers", "TerminalServices-RDPClient", "TerminalServices-RemoteConnectionManager", "TerminalServices-ServerUSBDevices", "TerminalServices-SessionBroker" },
+                ["RemoteDesktopServices"] = new[] { "RemoteDesktopServices-RdpCoreTS", "RemoteDesktopServices-SessionServices" },
+                ["CertificateServices"] = new[] { "CertificateServices-Deployment", "CertificateServicesClient" },
+                ["DeviceManagement"] = new[] { "DeviceManagement-Enterprise" },
+                ["FileServices"] = new[] { "FileServices-ServerManager" },
+                ["ManagementTools"] = new[] { "ManagementTools-RegistryProvider", "ManagementTools-TaskManagerProvider" },
+                ["PersistentMemory"] = new[] { "PersistentMemory-Nvdimm", "PersistentMemory-PmemDisk", "PersistentMemory-ScmBus" },
+                ["PowerShell"] = new[] { "PowerShell-DesiredStateConfiguration" },
+                ["ServerManager"] = new[] { "ServerManager-ConfigureSMRemoting", "ServerManager-DeploymentProvider", "ServerManager-MgmtProvider", "ServerManager-MultiMachine" },
+                ["SMBClient"] = new[] { "SmbClient", "SMBClient" },
+                ["SMBServer"] = new[] { "SMBServer" },
+                ["SMBWitnessClient"] = new[] { "SMBWitnessClient" },
+                ["SmartCard"] = new[] { "SmartCard-Audit", "SmartCard-DeviceEnum", "SmartCard-TPM" },
+                ["Shell"] = new[] { "Shell-ConnectedAccountState", "Shell-Core", "ShellCommon" },
+                ["Time"] = new[] { "Time-Service-PTP", "Time-Service" },
+                ["User"] = new[] { "User Control Panel", "User Device Registration", "User Profile Service", "User-Loader" },
+                ["Windows"] = new[] { "Windows Defender", "Windows Firewall" },
+                ["WPD"] = new[] { "WPD-ClassInstaller", "WPD-CompositeClassDriver", "WPD-MTPClassDriver" }
+            };
 
-                if (logs.Count == 1)
+            // Check if this component path matches any known patterns
+            foreach (var kvp in knownComponents)
+            {
+                if (kvp.Value.Any(pattern => componentPath.StartsWith(pattern, StringComparison.OrdinalIgnoreCase)))
                 {
-                    // Single log, add directly
-                    var logType = GetLogType(logs[0]);
-                    parent.Children.Add(new LogTreeItem
-                    {
-                        Name = $"{componentName} - {logType}",
-                        Tag = logs[0]
-                    });
-                }
-                else
-                {
-                    // Multiple logs, create component folder
-                    var componentFolder = new LogTreeItem
-                    {
-                        Name = componentName,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in logs.OrderBy(l => GetLogType(l)))
-                    {
-                        componentFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
-                    }
-
-                    parent.Children.Add(componentFolder);
+                    return kvp.Key;
                 }
             }
-            else
+
+            // For simple cases, take the first part before any hyphen
+            var firstPart = componentPath.Split('-')[0];
+            return firstPart;
+        }
+
+        private void BuildMainComponentFolder(LogTreeItem parent, string mainComponent, List<string> logs)
+        {
+            if (logs.Count == 1 && IsSimpleComponent(logs[0]))
             {
-                // Multi-part component like "AppV-Client"
-                var mainComponent = pathParts[0]; // "AppV"
-                var subComponent = string.Join("-", pathParts.Skip(1)); // "Client"
-
-                // Find or create the main component folder
-                var mainFolder = parent.Children.FirstOrDefault(c => c.Name == mainComponent && c.IsFolder);
-                if (mainFolder == null)
+                // Single simple log, add directly
+                var logType = GetLogType(logs[0]);
+                parent.Children.Add(new LogTreeItem
                 {
-                    mainFolder = new LogTreeItem
-                    {
-                        Name = mainComponent,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-                    parent.Children.Add(mainFolder);
-                }
+                    Name = $"{mainComponent} - {logType}",
+                    Tag = logs[0]
+                });
+                return;
+            }
 
-                // Create sub-component folder
-                if (logs.Count == 1)
+            // Create main component folder
+            var mainFolder = new LogTreeItem
+            {
+                Name = mainComponent,
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            // Group logs by sub-component within this main component
+            var subComponentGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in logs)
+            {
+                var subComponent = GetSubComponentForLog(log, mainComponent);
+                if (!subComponentGroups.ContainsKey(subComponent))
+                    subComponentGroups[subComponent] = new List<string>();
+                subComponentGroups[subComponent].Add(log);
+            }
+
+            // Build sub-structure
+            foreach (var subGroup in subComponentGroups.OrderBy(x => x.Key))
+            {
+                if (subGroup.Value.Count == 1)
                 {
                     // Single log in sub-component
-                    var logType = GetLogType(logs[0]);
+                    var logType = GetLogType(subGroup.Value[0]);
+                    var displayName = subGroup.Key == mainComponent ? logType : $"{subGroup.Key} - {logType}";
+
                     mainFolder.Children.Add(new LogTreeItem
                     {
-                        Name = $"{subComponent} - {logType}",
-                        Tag = logs[0]
+                        Name = displayName,
+                        Tag = subGroup.Value[0]
                     });
                 }
                 else
                 {
-                    // Multiple logs in sub-component, create sub-folder
+                    // Multiple logs, create sub-folder
                     var subFolder = new LogTreeItem
                     {
-                        Name = subComponent,
+                        Name = subGroup.Key,
                         IsFolder = true,
                         IsExpanded = false
                     };
 
-                    foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                    foreach (var log in subGroup.Value.OrderBy(l => GetLogType(l)))
                     {
                         subFolder.Children.Add(new LogTreeItem
                         {
@@ -297,6 +318,38 @@ namespace ZViewer.Services
                     mainFolder.Children.Add(subFolder);
                 }
             }
+
+            parent.Children.Add(mainFolder);
+        }
+
+        private bool IsSimpleComponent(string logName)
+        {
+            // Check if this is a simple component without sub-parts
+            var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0];
+
+            // Simple if it doesn't contain hyphens or is a known simple component
+            return !componentPath.Contains('-') ||
+                   new[] { "AAD", "AllJoyn", "AppHost", "AppID", "Backup", "Biometrics", "Cleanmgr", "CloudStore", "CodeIntegrity", "CoreApplication", "DateTimeControlPanel", "DeviceGuard", "DeviceSync", "DeviceUpdateAgent", "DxgKrnl", "EapHost", "EventCollector", "FeatureConfiguration", "FMS", "GenericRoaming", "GroupPolicy", "Help", "IdCtrls", "IKE", "Iphlpsvc", "KdsSvc", "LAPS", "LiveId", "MiStreamProvider", "Mprddm", "MsLbfoProvider", "NCSI", "NdisImPlatform", "NetworkLocationWizard", "NetworkProfile", "NetworkProvider", "NlaSvc", "Ntfs", "NTLM", "OfflineFiles", "Partition", "PerceptionRuntime", "PerceptionSensorDataService", "Policy", "PrintBRM", "PrintService", "ReadyBoost", "ReFS", "Regsvr32", "SearchUI", "SecurityMitigationsBroker", "SENSE", "SenseIR", "SilProvider", "StateRepository", "Store", "Storsvc", "Sysmon", "SystemDataArchiver", "SystemSettingsThreshold", "TaskScheduler", "TCPIP", "TWinUI", "TZSync", "TZUtil", "UAC", "UniversalTelemetryClient", "VDRVROOT", "VerifyHardwareSecurity", "VHDMP", "VPN", "Wcmsvc", "WebAuthN", "WER", "WFP", "Win32k", "WindowsSystemAssessmentTool", "WindowsUpdateClient", "WinHttp", "WinINet", "Winlogon", "WinRM", "WMPNSS", "WMI" }
+                   .Contains(componentPath, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private string GetSubComponentForLog(string logName, string mainComponent)
+        {
+            // Extract the sub-component part after the main component
+            var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0];
+
+            // Try to extract sub-component after main component
+            if (componentPath.StartsWith(mainComponent + "-", StringComparison.OrdinalIgnoreCase))
+            {
+                return componentPath.Substring(mainComponent.Length + 1);
+            }
+
+            // For complex cases, return the full component path minus main component
+            return componentPath;
         }
 
         private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)

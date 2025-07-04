@@ -123,11 +123,33 @@ namespace ZViewer.Services
                 {
                     BuildCrowdStrikeTree(parent, group.ToList());
                 }
-                else
+                else if (group.Key == "OpenSSH" || group.Key == "PowerShellCore")
                 {
+                    // Create folder for these
                     BuildGenericVendorTree(parent, group.Key, group.ToList());
                 }
+                else
+                {
+                    // Individual logs at root level (PDQ.com, Hardware Events, etc.)
+                    foreach (var log in group)
+                    {
+                        parent.Children.Add(new LogTreeItem
+                        {
+                            Name = GetFriendlyLogName(log),
+                            Tag = log
+                        });
+                    }
+                }
             }
+        }
+
+        private string GetFriendlyLogName(string logName)
+        {
+            // Convert some log names to friendlier versions
+            if (logName.Equals("OAlerts", StringComparison.OrdinalIgnoreCase))
+                return "Microsoft Office Alerts";
+
+            return logName;
         }
 
         private void BuildMicrosoftTree(LogTreeItem parent, List<string> microsoftLogs)
@@ -139,31 +161,201 @@ namespace ZViewer.Services
                 IsExpanded = false
             };
 
-            // Group by Windows vs other Microsoft products
-            var windowsLogs = microsoftLogs.Where(log => log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
-            var otherMSLogs = microsoftLogs.Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
+            // All Microsoft logs follow Microsoft-[Product]-[Component]%4[LogType] pattern
+            BuildMicrosoftProductTree(microsoftFolder, microsoftLogs);
 
-            // Build Windows sub-tree
-            if (windowsLogs.Any())
+            parent.Children.Add(microsoftFolder);
+        }
+
+        private void BuildMicrosoftProductTree(LogTreeItem parent, List<string> microsoftLogs)
+        {
+            // Group by product (Windows, AppV, User Experience Virtualization, etc.)
+            var productGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in microsoftLogs)
             {
-                var windowsFolder = new LogTreeItem
+                var productName = ExtractMicrosoftProductName(log);
+
+                if (!productGroups.ContainsKey(productName))
+                    productGroups[productName] = new List<string>();
+
+                productGroups[productName].Add(log);
+            }
+
+            // Build the tree structure for each product
+            foreach (var kvp in productGroups.OrderBy(x => x.Key))
+            {
+                var productName = kvp.Key;
+                var logs = kvp.Value;
+
+                BuildMicrosoftProductGroup(parent, productName, logs);
+            }
+        }
+
+        private string ExtractMicrosoftProductName(string logName)
+        {
+            // Handle: Microsoft-Windows-AppReadiness%4Admin -> "Windows"
+            // Handle: Microsoft-AppV-Client%4Admin -> "AppV" 
+            // Handle: Microsoft-User Experience Virtualization-Agent Driver%4Operational -> "User Experience Virtualization"
+            var normalizedLogName = logName.Replace("%4", "/");
+
+            if (!normalizedLogName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
+                return "Unknown";
+
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split('/');
+            var productAndComponent = parts[0]; // "Windows-AppReadiness" or "AppV-Client" or "User Experience Virtualization-Agent Driver"
+
+            // For Windows logs, product is always "Windows"
+            if (productAndComponent.StartsWith("Windows-", StringComparison.OrdinalIgnoreCase))
+                return "Windows";
+
+            // For other products, split by dash and find the product part
+            var dashParts = productAndComponent.Split('-');
+
+            // Handle "User Experience Virtualization" - it has spaces in the name
+            if (dashParts.Length >= 3 && dashParts[0] == "User" && dashParts[1] == "Experience" && dashParts[2] == "Virtualization")
+                return "User Experience Virtualization";
+
+            // For simple cases like "AppV-Client", return "AppV"
+            return dashParts[0];
+        }
+
+        private void BuildMicrosoftProductGroup(LogTreeItem parent, string productName, List<string> logs)
+        {
+            if (logs.Count == 1)
+            {
+                // Single log - add directly with component and log type
+                var componentName = ExtractMicrosoftComponentName(logs[0]);
+                var logType = GetLogType(logs[0]);
+
+                if (string.IsNullOrEmpty(componentName))
                 {
-                    Name = "Windows",
+                    parent.Children.Add(new LogTreeItem
+                    {
+                        Name = $"{productName} - {logType}",
+                        Tag = logs[0]
+                    });
+                }
+                else
+                {
+                    parent.Children.Add(new LogTreeItem
+                    {
+                        Name = $"{productName} {componentName} - {logType}",
+                        Tag = logs[0]
+                    });
+                }
+            }
+            else
+            {
+                // Multiple logs - create product folder
+                var productFolder = new LogTreeItem
+                {
+                    Name = productName,
                     IsFolder = true,
                     IsExpanded = false
                 };
 
-                BuildWindowsComponentTree(windowsFolder, windowsLogs);
-                microsoftFolder.Children.Add(windowsFolder);
-            }
+                if (productName == "Windows")
+                {
+                    BuildWindowsComponentTree(productFolder, logs);
+                }
+                else
+                {
+                    BuildNonWindowsProductComponentTree(productFolder, logs);
+                }
 
-            // Build other Microsoft products sub-tree (like AppV)
-            if (otherMSLogs.Any())
+                parent.Children.Add(productFolder);
+            }
+        }
+
+        private void BuildNonWindowsProductComponentTree(LogTreeItem parent, List<string> logs)
+        {
+            // Group by component (Client, Agent Driver, etc.)
+            var componentGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in logs)
             {
-                BuildNonWindowsMicrosoftTree(microsoftFolder, otherMSLogs);
+                var componentName = ExtractMicrosoftComponentName(log);
+                if (string.IsNullOrEmpty(componentName))
+                    componentName = "Main";
+
+                if (!componentGroups.ContainsKey(componentName))
+                    componentGroups[componentName] = new List<string>();
+
+                componentGroups[componentName].Add(log);
             }
 
-            parent.Children.Add(microsoftFolder);
+            // Build each component group
+            foreach (var componentGroup in componentGroups.OrderBy(x => x.Key))
+            {
+                var componentName = componentGroup.Key;
+                var componentLogs = componentGroup.Value;
+
+                if (componentLogs.Count == 1)
+                {
+                    var logType = GetLogType(componentLogs[0]);
+                    parent.Children.Add(new LogTreeItem
+                    {
+                        Name = componentName == "Main" ? logType : $"{componentName} - {logType}",
+                        Tag = componentLogs[0]
+                    });
+                }
+                else
+                {
+                    var componentFolder = new LogTreeItem
+                    {
+                        Name = componentName,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
+                    {
+                        componentFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogType(log),
+                            Tag = log
+                        });
+                    }
+
+                    parent.Children.Add(componentFolder);
+                }
+            }
+        }
+
+        private string ExtractMicrosoftComponentName(string logName)
+        {
+            // Microsoft-Windows-AppReadiness%4Admin -> "AppReadiness"
+            // Microsoft-AppV-Client%4Admin -> "Client"
+            // Microsoft-User Experience Virtualization-Agent Driver%4Operational -> "Agent Driver"
+            var normalizedLogName = logName.Replace("%4", "/");
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split('/');
+            var productAndComponent = parts[0];
+
+            // Handle Windows logs
+            if (productAndComponent.StartsWith("Windows-", StringComparison.OrdinalIgnoreCase))
+            {
+                var componentPart = productAndComponent.Substring("Windows-".Length);
+                return componentPart.Replace("-", " ");
+            }
+
+            // Handle User Experience Virtualization
+            if (productAndComponent.StartsWith("User Experience Virtualization-", StringComparison.OrdinalIgnoreCase))
+            {
+                var componentPart = productAndComponent.Substring("User Experience Virtualization-".Length);
+                return componentPart.Replace("-", " ");
+            }
+
+            // Handle other products like AppV-Client
+            var dashParts = productAndComponent.Split('-');
+            if (dashParts.Length > 1)
+            {
+                return string.Join(" ", dashParts.Skip(1));
+            }
+
+            return ""; // No component
         }
 
         private void BuildNonWindowsMicrosoftTree(LogTreeItem parent, List<string> nonWindowsLogs)
@@ -191,9 +383,33 @@ namespace ZViewer.Services
             }
         }
 
+        private void BuildSpecialMicrosoftTree(LogTreeItem parent, List<string> specialLogs)
+        {
+            foreach (var log in specialLogs)
+            {
+                if (log.StartsWith("OAlerts", StringComparison.OrdinalIgnoreCase))
+                {
+                    parent.Children.Add(new LogTreeItem
+                    {
+                        Name = "Office Alerts",
+                        Tag = log
+                    });
+                }
+                else
+                {
+                    // Fallback for other special Microsoft logs
+                    parent.Children.Add(new LogTreeItem
+                    {
+                        Name = log,
+                        Tag = log
+                    });
+                }
+            }
+        }
+
         private string ExtractNonWindowsProductName(string logName)
         {
-            // Handle names like "Microsoft-AppV-Client%4Admin"
+            // Handle names like "Microsoft-AppV-Client%4Admin" and "Microsoft-System-Diagnostics-DiagnosticInvoker%4Operational"
             var normalizedLogName = logName.Replace("%4", "/");
 
             if (!normalizedLogName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
@@ -201,11 +417,18 @@ namespace ZViewer.Services
 
             var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
             var parts = withoutPrefix.Split('/');
-            var componentPath = parts[0]; // "AppV-Client"
+            var componentPath = parts[0]; // "AppV-Client" or "System-Diagnostics-DiagnosticInvoker"
 
             // Extract the main product name (first part before dash)
             var productParts = componentPath.Split('-');
-            return productParts[0]; // "AppV"
+
+            // Handle special cases like "System-Diagnostics" where we want "System" as the main category
+            if (productParts.Length >= 2 && productParts[0].Equals("System", StringComparison.OrdinalIgnoreCase))
+            {
+                return "System";
+            }
+
+            return productParts[0]; // "AppV", "ServerCore", "User", etc.
         }
 
         private void BuildProductComponentGroup(LogTreeItem parent, string productName, List<string> logs)
@@ -299,15 +522,24 @@ namespace ZViewer.Services
         private string ExtractComponentNameFromProduct(string logName)
         {
             // For "Microsoft-AppV-Client%4Admin" return "Client"
+            // For "Microsoft-System-Diagnostics-DiagnosticInvoker%4Operational" return "Diagnostics DiagnosticInvoker"
             var normalizedLogName = logName.Replace("%4", "/");
             var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
             var parts = withoutPrefix.Split('/');
-            var componentPath = parts[0]; // "AppV-Client"
+            var componentPath = parts[0]; // "AppV-Client" or "System-Diagnostics-DiagnosticInvoker"
 
             var componentParts = componentPath.Split('-');
+
+            // Handle System-Diagnostics-DiagnosticInvoker pattern
+            if (componentParts.Length >= 3 && componentParts[0].Equals("System", StringComparison.OrdinalIgnoreCase))
+            {
+                // Return "Diagnostics DiagnosticInvoker" (skip "System")
+                return string.Join(" ", componentParts.Skip(1));
+            }
+
             if (componentParts.Length > 1)
             {
-                // Skip the product name (AppV) and return the rest (Client)
+                // Skip the product name and return the rest
                 return string.Join(" ", componentParts.Skip(1));
             }
 
@@ -509,21 +741,24 @@ namespace ZViewer.Services
         // Helper methods for parsing log names based on physical file structure
         private string GetTopLevelCategory(string logName)
         {
-            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                return "Microsoft";
-
+            // Microsoft products
             if (logName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
                 return "Microsoft";
 
+            // CrowdStrike
             if (logName.StartsWith("CrowdStrike-", StringComparison.OrdinalIgnoreCase))
                 return "CrowdStrike";
 
-            // For other vendors, extract the first part before the first dash
-            var dashIndex = logName.IndexOf('-');
-            if (dashIndex > 0)
-                return logName.Substring(0, dashIndex);
+            // OpenSSH gets its own folder
+            if (logName.StartsWith("OpenSSH", StringComparison.OrdinalIgnoreCase))
+                return "OpenSSH";
 
-            return "Other";
+            // PowerShellCore gets its own folder  
+            if (logName.StartsWith("PowerShellCore", StringComparison.OrdinalIgnoreCase))
+                return "PowerShellCore";
+
+            // Everything else is individual at root level
+            return logName;
         }
 
         private string GetLogType(string logName)

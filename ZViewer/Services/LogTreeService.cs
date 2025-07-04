@@ -166,183 +166,6 @@ namespace ZViewer.Services
             parent.Children.Add(microsoftFolder);
         }
 
-        private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
-        {
-            // Group by main component (e.g., AppV, PowerShell, etc.)
-            var componentGroups = new Dictionary<string, List<string>>();
-
-            foreach (var log in windowsLogs)
-            {
-                var componentName = ExtractWindowsComponentName(log);
-
-                if (!componentGroups.ContainsKey(componentName))
-                    componentGroups[componentName] = new List<string>();
-
-                componentGroups[componentName].Add(log);
-            }
-
-            // Build the tree structure for each component
-            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
-            {
-                var componentName = kvp.Key;
-                var logs = kvp.Value;
-
-                BuildWindowsComponentGroup(parent, componentName, logs);
-            }
-        }
-
-        private string ExtractWindowsComponentName(string logName)
-        {
-            // Handle physical file names like "Microsoft-Windows-AppReadiness%4Admin"
-            // Convert %4 back to / for processing
-            var normalizedLogName = logName.Replace("%4", "/");
-
-            if (!normalizedLogName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                return "Unknown";
-
-            var withoutPrefix = normalizedLogName.Substring("Microsoft-Windows-".Length);
-            var parts = withoutPrefix.Split('/');
-            var componentPath = parts[0]; // "AppReadiness", "PowerShell", "AAD", etc.
-
-            // Handle multi-part component names like "Folder Redirection"
-            return componentPath.Replace("-", " ");
-        }
-
-        private void BuildWindowsComponentGroup(LogTreeItem parent, string componentName, List<string> logs)
-        {
-            if (logs.Count == 1)
-            {
-                // Single log - add directly with log type
-                var logType = GetLogType(logs[0]);
-                parent.Children.Add(new LogTreeItem
-                {
-                    Name = $"{componentName} - {logType}",
-                    Tag = logs[0]
-                });
-            }
-            else
-            {
-                // Multiple logs - create component folder
-                var componentFolder = new LogTreeItem
-                {
-                    Name = componentName,
-                    IsFolder = true,
-                    IsExpanded = false
-                };
-
-                // Add all log types for this component
-                foreach (var log in logs.OrderBy(l => GetLogType(l)))
-                {
-                    componentFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = GetLogType(log),
-                        Tag = log
-                    });
-                }
-
-                parent.Children.Add(componentFolder);
-            }
-        }
-
-        private void BuildComponentTree(LogTreeItem parent, string mainComponent, List<string> logs)
-        {
-            if (logs.Count == 1)
-            {
-                // Single log - add directly
-                var logType = GetLogType(logs[0]);
-                parent.Children.Add(new LogTreeItem
-                {
-                    Name = $"{mainComponent} - {logType}",
-                    Tag = logs[0]
-                });
-            }
-            else
-            {
-                // Multiple logs - create folder
-                var componentFolder = new LogTreeItem
-                {
-                    Name = mainComponent,
-                    IsFolder = true,
-                    IsExpanded = false
-                };
-
-                foreach (var log in logs.OrderBy(l => GetLogType(l)))
-                {
-                    componentFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = GetLogType(log),
-                        Tag = log
-                    });
-                }
-
-                parent.Children.Add(componentFolder);
-            }
-        }
-
-        private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)
-        {
-            var crowdStrikeFolder = new LogTreeItem
-            {
-                Name = "CrowdStrike",
-                IsFolder = true,
-                IsExpanded = false
-            };
-
-            // Group CrowdStrike logs by service/component
-            var componentGroups = new Dictionary<string, List<string>>();
-
-            foreach (var log in crowdStrikeLogs)
-            {
-                var componentName = ExtractCrowdStrikeComponentName(log);
-
-                if (!componentGroups.ContainsKey(componentName))
-                    componentGroups[componentName] = new List<string>();
-
-                componentGroups[componentName].Add(log);
-            }
-
-            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
-            {
-                var componentName = kvp.Key;
-                var logs = kvp.Value;
-
-                if (logs.Count == 1)
-                {
-                    var logType = GetLogType(logs[0]);
-                    crowdStrikeFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = $"{componentName} - {logType}",
-                        Tag = logs[0]
-                    });
-                }
-                else
-                {
-                    var componentFolder = new LogTreeItem
-                    {
-                        Name = componentName,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in logs.OrderBy(l => GetLogType(l)))
-                    {
-                        componentFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
-                    }
-
-                    crowdStrikeFolder.Children.Add(componentFolder);
-                }
-            }
-
-            if (crowdStrikeFolder.Children.Any())
-            {
-                parent.Children.Add(crowdStrikeFolder);
-            }
-        }
-
         private void BuildNonWindowsMicrosoftTree(LogTreeItem parent, List<string> nonWindowsLogs)
         {
             // Group by main product (e.g., AppV, etc.)
@@ -490,16 +313,160 @@ namespace ZViewer.Services
 
             return componentPath;
         }
+
+        private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
+        {
+            // Group by main component (e.g., AppV, PowerShell, etc.)
+            var componentGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in windowsLogs)
+            {
+                var componentName = ExtractWindowsComponentName(log);
+
+                if (!componentGroups.ContainsKey(componentName))
+                    componentGroups[componentName] = new List<string>();
+
+                componentGroups[componentName].Add(log);
+            }
+
+            // Build the tree structure for each component
+            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
+            {
+                var componentName = kvp.Key;
+                var logs = kvp.Value;
+
+                BuildWindowsComponentGroup(parent, componentName, logs);
+            }
+        }
+
+        private string ExtractWindowsComponentName(string logName)
+        {
+            // Handle physical file names like "Microsoft-Windows-AppReadiness%4Admin"
+            // Convert %4 back to / for processing
+            var normalizedLogName = logName.Replace("%4", "/");
+
+            if (!normalizedLogName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                return "Unknown";
+
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-Windows-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "AppReadiness", "PowerShell", "AAD", etc.
+
+            // Handle multi-part component names like "Folder Redirection"
+            return componentPath.Replace("-", " ");
+        }
+
+        private void BuildWindowsComponentGroup(LogTreeItem parent, string componentName, List<string> logs)
+        {
+            if (logs.Count == 1)
+            {
+                // Single log - add directly with log type
+                var logType = GetLogType(logs[0]);
+                parent.Children.Add(new LogTreeItem
+                {
+                    Name = $"{componentName} - {logType}",
+                    Tag = logs[0]
+                });
+            }
+            else
+            {
+                // Multiple logs - create component folder
+                var componentFolder = new LogTreeItem
+                {
+                    Name = componentName,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                // Add all log types for this component
+                foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                {
+                    componentFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = GetLogType(log),
+                        Tag = log
+                    });
+                }
+
+                parent.Children.Add(componentFolder);
+            }
+        }
+
+        private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)
+        {
+            var crowdStrikeFolder = new LogTreeItem
+            {
+                Name = "CrowdStrike",
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            // Group CrowdStrike logs by service/component
+            var componentGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in crowdStrikeLogs)
+            {
+                var componentName = ExtractCrowdStrikeComponentName(log);
+
+                if (!componentGroups.ContainsKey(componentName))
+                    componentGroups[componentName] = new List<string>();
+
+                componentGroups[componentName].Add(log);
+            }
+
+            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
+            {
+                var componentName = kvp.Key;
+                var logs = kvp.Value;
+
+                if (logs.Count == 1)
+                {
+                    var logType = GetLogType(logs[0]);
+                    crowdStrikeFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = $"{componentName} - {logType}",
+                        Tag = logs[0]
+                    });
+                }
+                else
+                {
+                    var componentFolder = new LogTreeItem
+                    {
+                        Name = componentName,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                    {
+                        componentFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogType(log),
+                            Tag = log
+                        });
+                    }
+
+                    crowdStrikeFolder.Children.Add(componentFolder);
+                }
+            }
+
+            if (crowdStrikeFolder.Children.Any())
+            {
+                parent.Children.Add(crowdStrikeFolder);
+            }
+        }
+
+        private string ExtractCrowdStrikeComponentName(string logName)
         {
             // Handle names like "CrowdStrike-Falcon Sensor-CSFalconService%4Operational"
             var normalizedLogName = logName.Replace("%4", "/");
-            
+
             if (!normalizedLogName.StartsWith("CrowdStrike-", StringComparison.OrdinalIgnoreCase))
                 return "Unknown";
 
             var withoutPrefix = normalizedLogName.Substring("CrowdStrike-".Length);
-        var parts = withoutPrefix.Split('/');
-        var componentPath = parts[0]; // "Falcon Sensor-CSFalconService"
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "Falcon Sensor-CSFalconService"
 
             // Clean up the component name
             return componentPath.Replace("-", " ");

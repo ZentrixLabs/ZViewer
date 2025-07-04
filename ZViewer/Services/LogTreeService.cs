@@ -143,6 +143,7 @@ namespace ZViewer.Services
             var windowsLogs = microsoftLogs.Where(log => log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
             var otherMSLogs = microsoftLogs.Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
 
+            // Build Windows sub-tree
             if (windowsLogs.Any())
             {
                 var windowsFolder = new LogTreeItem
@@ -156,54 +157,90 @@ namespace ZViewer.Services
                 microsoftFolder.Children.Add(windowsFolder);
             }
 
-            // Add other Microsoft logs directly
-            foreach (var log in otherMSLogs.OrderBy(l => l))
+            // Build other Microsoft products sub-tree (like AppV)
+            if (otherMSLogs.Any())
             {
-                microsoftFolder.Children.Add(new LogTreeItem
-                {
-                    Name = GetDisplayName(log),
-                    Tag = log
-                });
+                BuildNonWindowsMicrosoftTree(microsoftFolder, otherMSLogs);
             }
 
-            if (microsoftFolder.Children.Any())
-            {
-                parent.Children.Add(microsoftFolder);
-            }
+            parent.Children.Add(microsoftFolder);
         }
 
         private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
         {
-            // Group logs by their first component part (before the first hyphen after "Microsoft-Windows-")
+            // Group by main component (e.g., AppV, PowerShell, etc.)
             var componentGroups = new Dictionary<string, List<string>>();
 
             foreach (var log in windowsLogs)
             {
-                if (log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Parse: Microsoft-Windows-AppV-Client/Admin
-                    var withoutPrefix = log.Substring("Microsoft-Windows-".Length);
-                    var parts = withoutPrefix.Split('/');
-                    var componentPath = parts[0]; // "AppV-Client"
+                var componentName = ExtractWindowsComponentName(log);
 
-                    // Get the first part as the main component
-                    var componentParts = componentPath.Split('-');
-                    var mainComponent = componentParts[0]; // "AppV"
+                if (!componentGroups.ContainsKey(componentName))
+                    componentGroups[componentName] = new List<string>();
 
-                    if (!componentGroups.ContainsKey(mainComponent))
-                        componentGroups[mainComponent] = new List<string>();
-
-                    componentGroups[mainComponent].Add(log);
-                }
+                componentGroups[componentName].Add(log);
             }
 
-            // Build the tree structure for each main component
+            // Build the tree structure for each component
             foreach (var kvp in componentGroups.OrderBy(x => x.Key))
             {
-                var mainComponent = kvp.Key;
+                var componentName = kvp.Key;
                 var logs = kvp.Value;
 
-                BuildComponentTree(parent, mainComponent, logs);
+                BuildWindowsComponentGroup(parent, componentName, logs);
+            }
+        }
+
+        private string ExtractWindowsComponentName(string logName)
+        {
+            // Handle physical file names like "Microsoft-Windows-AppReadiness%4Admin"
+            // Convert %4 back to / for processing
+            var normalizedLogName = logName.Replace("%4", "/");
+
+            if (!normalizedLogName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+                return "Unknown";
+
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-Windows-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "AppReadiness", "PowerShell", "AAD", etc.
+
+            // Handle multi-part component names like "Folder Redirection"
+            return componentPath.Replace("-", " ");
+        }
+
+        private void BuildWindowsComponentGroup(LogTreeItem parent, string componentName, List<string> logs)
+        {
+            if (logs.Count == 1)
+            {
+                // Single log - add directly with log type
+                var logType = GetLogType(logs[0]);
+                parent.Children.Add(new LogTreeItem
+                {
+                    Name = $"{componentName} - {logType}",
+                    Tag = logs[0]
+                });
+            }
+            else
+            {
+                // Multiple logs - create component folder
+                var componentFolder = new LogTreeItem
+                {
+                    Name = componentName,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                // Add all log types for this component
+                foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                {
+                    componentFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = GetLogType(log),
+                        Tag = log
+                    });
+                }
+
+                parent.Children.Add(componentFolder);
             }
         }
 
@@ -211,110 +248,35 @@ namespace ZViewer.Services
         {
             if (logs.Count == 1)
             {
-                // Single log - check if it has sub-components
-                var log = logs[0];
-                var subComponents = GetSubComponents(log);
-
-                if (subComponents.Count <= 1)
+                // Single log - add directly
+                var logType = GetLogType(logs[0]);
+                parent.Children.Add(new LogTreeItem
                 {
-                    // No sub-components, add directly
-                    var logType = GetLogType(log);
-                    parent.Children.Add(new LogTreeItem
+                    Name = $"{mainComponent} - {logType}",
+                    Tag = logs[0]
+                });
+            }
+            else
+            {
+                // Multiple logs - create folder
+                var componentFolder = new LogTreeItem
+                {
+                    Name = mainComponent,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                {
+                    componentFolder.Children.Add(new LogTreeItem
                     {
-                        Name = $"{mainComponent} - {logType}",
+                        Name = GetLogType(log),
                         Tag = log
                     });
-                    return;
                 }
+
+                parent.Children.Add(componentFolder);
             }
-
-            // Multiple logs or has sub-components - create main component folder
-            var mainFolder = new LogTreeItem
-            {
-                Name = mainComponent,
-                IsFolder = true,
-                IsExpanded = false
-            };
-
-            // Group by sub-component
-            var subComponentGroups = new Dictionary<string, List<string>>();
-
-            foreach (var log in logs)
-            {
-                var subComponents = GetSubComponents(log);
-                var subComponentKey = subComponents.Count > 1 ? string.Join("-", subComponents.Skip(1)) : ""; // Skip the main component
-
-                if (string.IsNullOrEmpty(subComponentKey))
-                    subComponentKey = mainComponent; // Use main component name if no sub-component
-
-                if (!subComponentGroups.ContainsKey(subComponentKey))
-                    subComponentGroups[subComponentKey] = new List<string>();
-
-                subComponentGroups[subComponentKey].Add(log);
-            }
-
-            // Build sub-component structure
-            foreach (var subGroup in subComponentGroups.OrderBy(x => x.Key))
-            {
-                var subComponentName = subGroup.Key;
-                var subLogs = subGroup.Value;
-
-                if (subComponentName == mainComponent)
-                {
-                    // Logs that belong directly to the main component
-                    foreach (var log in subLogs.OrderBy(l => GetLogType(l)))
-                    {
-                        mainFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
-                    }
-                }
-                else if (subLogs.Count == 1)
-                {
-                    // Single log in sub-component
-                    var logType = GetLogType(subLogs[0]);
-                    mainFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = $"{subComponentName} - {logType}",
-                        Tag = subLogs[0]
-                    });
-                }
-                else
-                {
-                    // Multiple logs in sub-component - create sub-folder
-                    var subFolder = new LogTreeItem
-                    {
-                        Name = subComponentName,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in subLogs.OrderBy(l => GetLogType(l)))
-                    {
-                        subFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
-                    }
-
-                    mainFolder.Children.Add(subFolder);
-                }
-            }
-
-            parent.Children.Add(mainFolder);
-        }
-
-        private List<string> GetSubComponents(string logName)
-        {
-            // Parse: Microsoft-Windows-AppV-Client/Admin -> ["AppV", "Client"]
-            var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
-            var parts = withoutPrefix.Split('/');
-            var componentPath = parts[0]; // "AppV-Client"
-
-            return componentPath.Split('-').ToList();
         }
 
         private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)
@@ -326,19 +288,221 @@ namespace ZViewer.Services
                 IsExpanded = false
             };
 
-            foreach (var log in crowdStrikeLogs.OrderBy(l => l))
+            // Group CrowdStrike logs by service/component
+            var componentGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in crowdStrikeLogs)
             {
-                crowdStrikeFolder.Children.Add(new LogTreeItem
+                var componentName = ExtractCrowdStrikeComponentName(log);
+
+                if (!componentGroups.ContainsKey(componentName))
+                    componentGroups[componentName] = new List<string>();
+
+                componentGroups[componentName].Add(log);
+            }
+
+            foreach (var kvp in componentGroups.OrderBy(x => x.Key))
+            {
+                var componentName = kvp.Key;
+                var logs = kvp.Value;
+
+                if (logs.Count == 1)
                 {
-                    Name = GetDisplayName(log),
-                    Tag = log
-                });
+                    var logType = GetLogType(logs[0]);
+                    crowdStrikeFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = $"{componentName} - {logType}",
+                        Tag = logs[0]
+                    });
+                }
+                else
+                {
+                    var componentFolder = new LogTreeItem
+                    {
+                        Name = componentName,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in logs.OrderBy(l => GetLogType(l)))
+                    {
+                        componentFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogType(log),
+                            Tag = log
+                        });
+                    }
+
+                    crowdStrikeFolder.Children.Add(componentFolder);
+                }
             }
 
             if (crowdStrikeFolder.Children.Any())
             {
                 parent.Children.Add(crowdStrikeFolder);
             }
+        }
+
+        private void BuildNonWindowsMicrosoftTree(LogTreeItem parent, List<string> nonWindowsLogs)
+        {
+            // Group by main product (e.g., AppV, etc.)
+            var productGroups = new Dictionary<string, List<string>>();
+
+            foreach (var log in nonWindowsLogs)
+            {
+                var productName = ExtractNonWindowsProductName(log);
+
+                if (!productGroups.ContainsKey(productName))
+                    productGroups[productName] = new List<string>();
+
+                productGroups[productName].Add(log);
+            }
+
+            // Build the tree structure for each product
+            foreach (var kvp in productGroups.OrderBy(x => x.Key))
+            {
+                var productName = kvp.Key;
+                var logs = kvp.Value;
+
+                BuildProductComponentGroup(parent, productName, logs);
+            }
+        }
+
+        private string ExtractNonWindowsProductName(string logName)
+        {
+            // Handle names like "Microsoft-AppV-Client%4Admin"
+            var normalizedLogName = logName.Replace("%4", "/");
+
+            if (!normalizedLogName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
+                return "Unknown";
+
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "AppV-Client"
+
+            // Extract the main product name (first part before dash)
+            var productParts = componentPath.Split('-');
+            return productParts[0]; // "AppV"
+        }
+
+        private void BuildProductComponentGroup(LogTreeItem parent, string productName, List<string> logs)
+        {
+            if (logs.Count == 1)
+            {
+                // Single log - add directly with full component and log type
+                var componentName = ExtractFullComponentName(logs[0]);
+                var logType = GetLogType(logs[0]);
+                parent.Children.Add(new LogTreeItem
+                {
+                    Name = $"{componentName} - {logType}",
+                    Tag = logs[0]
+                });
+            }
+            else
+            {
+                // Multiple logs - create product folder and organize by components
+                var productFolder = new LogTreeItem
+                {
+                    Name = productName,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                // Group by full component name (e.g., "Client" for AppV-Client logs)
+                var componentGroups = new Dictionary<string, List<string>>();
+
+                foreach (var log in logs)
+                {
+                    var componentName = ExtractComponentNameFromProduct(log);
+
+                    if (!componentGroups.ContainsKey(componentName))
+                        componentGroups[componentName] = new List<string>();
+
+                    componentGroups[componentName].Add(log);
+                }
+
+                // Build each component group
+                foreach (var componentGroup in componentGroups.OrderBy(x => x.Key))
+                {
+                    var componentName = componentGroup.Key;
+                    var componentLogs = componentGroup.Value;
+
+                    if (componentLogs.Count == 1)
+                    {
+                        var logType = GetLogType(componentLogs[0]);
+                        productFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = $"{componentName} - {logType}",
+                            Tag = componentLogs[0]
+                        });
+                    }
+                    else
+                    {
+                        var componentFolder = new LogTreeItem
+                        {
+                            Name = componentName,
+                            IsFolder = true,
+                            IsExpanded = false
+                        };
+
+                        foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
+                        {
+                            componentFolder.Children.Add(new LogTreeItem
+                            {
+                                Name = GetLogType(log),
+                                Tag = log
+                            });
+                        }
+
+                        productFolder.Children.Add(componentFolder);
+                    }
+                }
+
+                parent.Children.Add(productFolder);
+            }
+        }
+
+        private string ExtractFullComponentName(string logName)
+        {
+            // For "Microsoft-AppV-Client%4Admin" return "AppV Client"
+            var normalizedLogName = logName.Replace("%4", "/");
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "AppV-Client"
+
+            return componentPath.Replace("-", " ");
+        }
+
+        private string ExtractComponentNameFromProduct(string logName)
+        {
+            // For "Microsoft-AppV-Client%4Admin" return "Client"
+            var normalizedLogName = logName.Replace("%4", "/");
+            var withoutPrefix = normalizedLogName.Substring("Microsoft-".Length);
+            var parts = withoutPrefix.Split('/');
+            var componentPath = parts[0]; // "AppV-Client"
+
+            var componentParts = componentPath.Split('-');
+            if (componentParts.Length > 1)
+            {
+                // Skip the product name (AppV) and return the rest (Client)
+                return string.Join(" ", componentParts.Skip(1));
+            }
+
+            return componentPath;
+        }
+        {
+            // Handle names like "CrowdStrike-Falcon Sensor-CSFalconService%4Operational"
+            var normalizedLogName = logName.Replace("%4", "/");
+            
+            if (!normalizedLogName.StartsWith("CrowdStrike-", StringComparison.OrdinalIgnoreCase))
+                return "Unknown";
+
+            var withoutPrefix = normalizedLogName.Substring("CrowdStrike-".Length);
+        var parts = withoutPrefix.Split('/');
+        var componentPath = parts[0]; // "Falcon Sensor-CSFalconService"
+
+            // Clean up the component name
+            return componentPath.Replace("-", " ");
         }
 
         private void BuildGenericVendorTree(LogTreeItem parent, string vendor, List<string> logs)
@@ -387,25 +551,44 @@ namespace ZViewer.Services
             if (logName.StartsWith("CrowdStrike-", StringComparison.OrdinalIgnoreCase))
                 return "CrowdStrike";
 
-            // For other vendors, extract the first part
-            var parts = logName.Split('-', '/');
-            if (parts.Length > 1)
-                return parts[0];
+            // For other vendors, extract the first part before the first dash
+            var dashIndex = logName.IndexOf('-');
+            if (dashIndex > 0)
+                return logName.Substring(0, dashIndex);
 
             return "Other";
         }
 
         private string GetLogType(string logName)
         {
+            // Handle physical file names with %4 encoding
+            var normalizedLogName = logName.Replace("%4", "/");
+
             // Extract log type (Operational, Admin, etc.) from Component/LogType
-            var parts = logName.Split('/');
-            return parts.Length > 1 ? parts[^1] : "Operational";
+            var slashIndex = normalizedLogName.LastIndexOf('/');
+            if (slashIndex > 0 && slashIndex < normalizedLogName.Length - 1)
+            {
+                return normalizedLogName.Substring(slashIndex + 1);
+            }
+
+            return "Operational"; // Default fallback
         }
 
         private string GetDisplayName(string logName)
         {
-            // Create a friendly display name - just return the log type since we handle hierarchy differently now
-            return GetLogType(logName);
+            // For non-Microsoft/non-CrowdStrike logs, create a friendly display name
+            var logType = GetLogType(logName);
+            var normalizedLogName = logName.Replace("%4", "/");
+
+            // Try to extract a meaningful component name
+            var parts = normalizedLogName.Split('-', '/');
+            if (parts.Length > 1)
+            {
+                var componentPart = parts[parts.Length - 2]; // Get the part before the log type
+                return $"{componentPart} - {logType}";
+            }
+
+            return logType;
         }
 
         private bool IsWindowsLog(string logName)

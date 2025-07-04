@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics.Eventing.Reader;
 using System.Linq;
 using System.Threading.Tasks;
 using ZViewer.Models;
@@ -37,12 +36,14 @@ namespace ZViewer.Services
                     IsExpanded = true
                 };
 
+                // Add standard Windows logs
                 windowsLogs.Children.AddRange(new[]
                 {
                     new LogTreeItem { Name = "Application", Tag = "Application" },
                     new LogTreeItem { Name = "Security", Tag = "Security" },
                     new LogTreeItem { Name = "Setup", Tag = "Setup" },
-                    new LogTreeItem { Name = "System", Tag = "System" }
+                    new LogTreeItem { Name = "System", Tag = "System" },
+                    new LogTreeItem { Name = "Forwarded Events", Tag = "ForwardedEvents" }
                 });
 
                 root.Children.Add(windowsLogs);
@@ -60,27 +61,24 @@ namespace ZViewer.Services
 
                 try
                 {
-                    _loggingService.LogInformation("Starting to load service logs for tree...");
+                    _loggingService.LogInformation("Starting to build physical log tree...");
 
                     var allLogs = await _eventLogService.GetAvailableLogsAsync();
                     var allLogsList = allLogs.ToList();
 
                     _loggingService.LogInformation("Retrieved {Count} total logs for tree building", allLogsList.Count);
 
-                    var serviceLogs = allLogsList.Where(log =>
-                        !IsWindowsLog(log) &&
-                        !log.Equals("All", StringComparison.OrdinalIgnoreCase))
-                        .ToList();
+                    // Filter out Windows logs and build service log tree
+                    var serviceLogs = allLogsList.Where(log => !IsWindowsLog(log) && !log.Equals("All", StringComparison.OrdinalIgnoreCase)).ToList();
 
                     _loggingService.LogInformation("Found {Count} service logs to process", serviceLogs.Count);
 
                     if (serviceLogs.Any())
                     {
-                        BuildServiceLogTree(appsServicesLogs, serviceLogs);
+                        BuildPhysicalLogTree(appsServicesLogs, serviceLogs);
                         root.Children.Add(appsServicesLogs);
 
-                        _loggingService.LogInformation("Successfully built service log tree with {Count} categories",
-                            appsServicesLogs.Children.Count);
+                        _loggingService.LogInformation("Successfully built physical log tree with {Count} categories", appsServicesLogs.Children.Count);
                     }
                     else
                     {
@@ -91,7 +89,6 @@ namespace ZViewer.Services
                 catch (Exception ex)
                 {
                     _loggingService.LogError(ex, "Failed to load service logs, but continuing with basic logs");
-                    // Still add the folder even if empty
                     root.Children.Add(appsServicesLogs);
                 }
             }
@@ -109,10 +106,10 @@ namespace ZViewer.Services
             return root;
         }
 
-        private static void BuildServiceLogTree(LogTreeItem parent, List<string> logs)
+        private void BuildPhysicalLogTree(LogTreeItem parent, List<string> logs)
         {
+            // Group logs by vendor/category first
             var grouped = logs
-                .Where(log => log.Contains('-') || log.Contains('/'))
                 .GroupBy(log => GetTopLevelCategory(log))
                 .OrderBy(g => g.Key);
 
@@ -120,387 +117,220 @@ namespace ZViewer.Services
             {
                 if (group.Key == "Microsoft")
                 {
-                    var microsoftFolder = new LogTreeItem
-                    {
-                        Name = "Microsoft",
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    // Build Microsoft subcategories using the enhanced method
-                    BuildMicrosoftSubcategories(microsoftFolder, group.ToList());
-                    parent.Children.Add(microsoftFolder);
+                    BuildMicrosoftTree(parent, group.ToList());
                 }
                 else if (group.Key == "CrowdStrike")
                 {
-                    // Special handling for CrowdStrike logs with spaces
-                    var crowdStrikeFolder = new LogTreeItem
-                    {
-                        Name = "CrowdStrike",
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    BuildCrowdStrikeSubcategories(crowdStrikeFolder, group.ToList());
-                    parent.Children.Add(crowdStrikeFolder);
-                }
-                else if (group.Count() <= 20) // Increased from 10 to be less restrictive
-                {
-                    var categoryFolder = new LogTreeItem
-                    {
-                        Name = group.Key,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in group.OrderBy(log => log))
-                    {
-                        categoryFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogDisplayName(log),
-                            Tag = log
-                        });
-                    }
-
-                    parent.Children.Add(categoryFolder);
+                    BuildCrowdStrikeTree(parent, group.ToList());
                 }
                 else
                 {
-                    // For categories with too many logs, create subcategories
-                    var categoryFolder = new LogTreeItem
-                    {
-                        Name = group.Key,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    var subgroups = group
-                        .GroupBy(log => GetSubCategory(log))
-                        .Where(sg => sg.Count() <= 15) // Only show reasonable subcategories
-                        .OrderBy(sg => sg.Key);
-
-                    foreach (var subgroup in subgroups)
-                    {
-                        if (subgroup.Count() == 1)
-                        {
-                            // Single item, add directly
-                            categoryFolder.Children.Add(new LogTreeItem
-                            {
-                                Name = GetLogDisplayName(subgroup.First()),
-                                Tag = subgroup.First()
-                            });
-                        }
-                        else
-                        {
-                            // Multiple items, create subfolder
-                            var subFolder = new LogTreeItem
-                            {
-                                Name = subgroup.Key,
-                                IsFolder = true,
-                                IsExpanded = false
-                            };
-
-                            foreach (var log in subgroup.OrderBy(log => log))
-                            {
-                                subFolder.Children.Add(new LogTreeItem
-                                {
-                                    Name = GetLogDisplayName(log),
-                                    Tag = log
-                                });
-                            }
-
-                            categoryFolder.Children.Add(subFolder);
-                        }
-                    }
-
-                    if (categoryFolder.Children.Any())
-                    {
-                        parent.Children.Add(categoryFolder);
-                    }
+                    BuildGenericVendorTree(parent, group.Key, group.ToList());
                 }
             }
+        }
 
-            // Add standalone logs (those without clear categorization OR specifically allowed)
-            var standaloneLogs = logs
-                .Where(log =>
-                    // Traditional standalone logs (no dashes or slashes AND not Windows logs)
-                    (!log.Contains('-') && !log.Contains('/') && !IsWindowsLog(log)) ||
-                    // OR specifically allowed standalone logs (regardless of naming pattern)
-                    ShouldShowStandaloneLog(log))
-                .Distinct() // Remove duplicates in case a log matches both conditions
-                .OrderBy(log => log)
-                .ToList();
-
-            foreach (var log in standaloneLogs)
+        private void BuildMicrosoftTree(LogTreeItem parent, List<string> microsoftLogs)
+        {
+            var microsoftFolder = new LogTreeItem
             {
-                parent.Children.Add(new LogTreeItem
+                Name = "Microsoft",
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            // Group by Windows vs other Microsoft products
+            var windowsLogs = microsoftLogs.Where(log => log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
+            var otherMSLogs = microsoftLogs.Where(log => !log.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            if (windowsLogs.Any())
+            {
+                var windowsFolder = new LogTreeItem
                 {
-                    Name = log,
+                    Name = "Windows",
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                BuildWindowsComponentTree(windowsFolder, windowsLogs);
+                microsoftFolder.Children.Add(windowsFolder);
+            }
+
+            // Add other Microsoft logs directly
+            foreach (var log in otherMSLogs.OrderBy(l => l))
+            {
+                microsoftFolder.Children.Add(new LogTreeItem
+                {
+                    Name = GetDisplayName(log),
                     Tag = log
                 });
             }
+
+            if (microsoftFolder.Children.Any())
+            {
+                parent.Children.Add(microsoftFolder);
+            }
         }
 
-        private static void BuildCrowdStrikeSubcategories(LogTreeItem crowdStrikeFolder, List<string> crowdStrikeLogs)
+        private void BuildWindowsComponentTree(LogTreeItem parent, List<string> windowsLogs)
         {
-            // Handle CrowdStrike logs with special parsing for spaces
-            foreach (var log in crowdStrikeLogs.OrderBy(log => log))
+            // Group by component (e.g., "Kernel-PnP", "TaskScheduler", etc.)
+            var componentGroups = windowsLogs
+                .GroupBy(log => GetWindowsComponent(log))
+                .OrderBy(g => g.Key);
+
+            foreach (var componentGroup in componentGroups)
             {
-                if (log.StartsWith("CrowdStrike-Falcon Sensor-", StringComparison.OrdinalIgnoreCase))
+                var componentLogs = componentGroup.ToList();
+
+                if (componentLogs.Count == 1)
                 {
-                    // Parse: CrowdStrike-Falcon Sensor-CSFalconService/Operational
-                    var afterPrefix = log.Substring("CrowdStrike-Falcon Sensor-".Length);
-                    var parts = afterPrefix.Split('/');
-
-                    if (parts.Length >= 2)
+                    // Single log, add directly
+                    parent.Children.Add(new LogTreeItem
                     {
-                        var serviceName = parts[0]; // CSFalconService
-                        var logType = parts[1];      // Operational
-
-                        // Create Falcon Sensor folder if it doesn't exist
-                        var falconSensorFolder = crowdStrikeFolder.Children
-                            .FirstOrDefault(c => c.Name == "Falcon Sensor");
-
-                        if (falconSensorFolder == null)
-                        {
-                            falconSensorFolder = new LogTreeItem
-                            {
-                                Name = "Falcon Sensor",
-                                IsFolder = true,
-                                IsExpanded = false
-                            };
-                            crowdStrikeFolder.Children.Add(falconSensorFolder);
-                        }
-
-                        // Create service folder if it doesn't exist
-                        var serviceFolder = falconSensorFolder.Children
-                            .FirstOrDefault(c => c.Name == serviceName);
-
-                        if (serviceFolder == null)
-                        {
-                            serviceFolder = new LogTreeItem
-                            {
-                                Name = serviceName,
-                                IsFolder = true,
-                                IsExpanded = false
-                            };
-                            falconSensorFolder.Children.Add(serviceFolder);
-                        }
-
-                        // Add the log type
-                        serviceFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = logType,
-                            Tag = log
-                        });
-                    }
-                    else
-                    {
-                        // Fallback: add directly if parsing fails
-                        crowdStrikeFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogDisplayName(log),
-                            Tag = log
-                        });
-                    }
+                        Name = GetDisplayName(componentLogs[0]),
+                        Tag = componentLogs[0]
+                    });
                 }
                 else
                 {
-                    // Other CrowdStrike logs, add directly
-                    crowdStrikeFolder.Children.Add(new LogTreeItem
+                    // Multiple logs for this component, create a folder
+                    var componentFolder = new LogTreeItem
                     {
-                        Name = GetLogDisplayName(log),
+                        Name = componentGroup.Key,
+                        IsFolder = true,
+                        IsExpanded = false
+                    };
+
+                    foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
+                    {
+                        componentFolder.Children.Add(new LogTreeItem
+                        {
+                            Name = GetLogType(log),
+                            Tag = log
+                        });
+                    }
+
+                    parent.Children.Add(componentFolder);
+                }
+            }
+        }
+
+        private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)
+        {
+            var crowdStrikeFolder = new LogTreeItem
+            {
+                Name = "CrowdStrike",
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            foreach (var log in crowdStrikeLogs.OrderBy(l => l))
+            {
+                crowdStrikeFolder.Children.Add(new LogTreeItem
+                {
+                    Name = GetDisplayName(log),
+                    Tag = log
+                });
+            }
+
+            if (crowdStrikeFolder.Children.Any())
+            {
+                parent.Children.Add(crowdStrikeFolder);
+            }
+        }
+
+        private void BuildGenericVendorTree(LogTreeItem parent, string vendor, List<string> logs)
+        {
+            if (logs.Count == 1)
+            {
+                // Single log, add directly
+                parent.Children.Add(new LogTreeItem
+                {
+                    Name = GetDisplayName(logs[0]),
+                    Tag = logs[0]
+                });
+            }
+            else
+            {
+                // Multiple logs, create vendor folder
+                var vendorFolder = new LogTreeItem
+                {
+                    Name = vendor,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                foreach (var log in logs.OrderBy(l => l))
+                {
+                    vendorFolder.Children.Add(new LogTreeItem
+                    {
+                        Name = GetDisplayName(log),
                         Tag = log
                     });
                 }
+
+                parent.Children.Add(vendorFolder);
             }
         }
 
-        private static void BuildMicrosoftSubcategories(LogTreeItem microsoftFolder, List<string> microsoftLogs)
-        {
-            // Group Microsoft logs by their subcategory
-            var subcategories = new Dictionary<string, List<string>>();
-
-            foreach (var log in microsoftLogs)
-            {
-                var subcategory = GetMicrosoftSubcategory(log);
-                if (!subcategories.ContainsKey(subcategory))
-                    subcategories[subcategory] = new List<string>();
-                subcategories[subcategory].Add(log);
-            }
-
-            foreach (var (subcategoryName, subcategoryLogs) in subcategories.OrderBy(x => x.Key))
-            {
-                if (subcategoryName == "Windows")
-                {
-                    // Special handling for Windows logs
-                    var windowsFolder = new LogTreeItem
-                    {
-                        Name = "Windows",
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in subcategoryLogs.OrderBy(log => log))
-                    {
-                        var displayName = GetWindowsLogDisplayName(log);
-                        windowsFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = displayName,
-                            Tag = log
-                        });
-                    }
-
-                    microsoftFolder.Children.Add(windowsFolder);
-                }
-                else if (subcategoryLogs.Count == 1)
-                {
-                    // Single log, add directly to Microsoft folder
-                    microsoftFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = GetLogDisplayName(subcategoryLogs[0]),
-                        Tag = subcategoryLogs[0]
-                    });
-                }
-                else
-                {
-                    // Multiple logs, create subfolder
-                    var subFolder = new LogTreeItem
-                    {
-                        Name = subcategoryName,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
-
-                    foreach (var log in subcategoryLogs.OrderBy(log => log))
-                    {
-                        subFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogDisplayName(log),
-                            Tag = log
-                        });
-                    }
-
-                    microsoftFolder.Children.Add(subFolder);
-                }
-            }
-        }
-
-        private static string GetMicrosoftSubcategory(string logName)
-        {
-            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
-                return "Windows";
-
-            // Extract the component name after "Microsoft-"
-            var withoutPrefix = logName.Substring("Microsoft-".Length);
-            var parts = withoutPrefix.Split(new[] { '-', '/' }, StringSplitOptions.RemoveEmptyEntries);
-
-            if (parts.Length > 0)
-            {
-                // Map known categories to friendly names
-                return parts[0] switch
-                {
-                    "Client" when withoutPrefix.StartsWith("Client-Licensing") => "Client Licensing Platform",
-                    "IE" => "Internet Explorer",
-                    "IEFRAME" => "Internet Explorer Frame",
-                    "AppV" => "Application Virtualization",
-                    "OneCore" => "OneCore",
-                    "Office" => "Office",
-                    "WFP" => "Windows Filtering Platform",
-                    _ => parts[0]
-                };
-            }
-
-            return "Other";
-        }
-
-        private static string GetSubCategory(string logName)
-        {
-            // Extract a meaningful subcategory from the log name
-            var parts = logName.Split('-', '/');
-
-            if (parts.Length >= 3)
-            {
-                return parts[2]; // Usually the component name
-            }
-
-            if (parts.Length >= 2)
-            {
-                return parts[1];
-            }
-
-            return "Other";
-        }
-
-        private static bool IsWindowsLog(string logName)
-        {
-            return logName.Equals("Application", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("Security", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("Setup", StringComparison.OrdinalIgnoreCase) ||
-                   logName.Equals("System", StringComparison.OrdinalIgnoreCase);
-        }
-
-        // NEW HELPER METHODS for better organization
-        private static string ExtractWindowsComponent(string logName)
-        {
-            // Remove "Microsoft-Windows-" prefix and extract component
-            var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
-            var parts = withoutPrefix.Split(new[] { '/', '-' }, 2);
-            return parts[0];
-        }
-
-        private static string GetWindowsLogDisplayName(string logName)
-        {
-            return logName
-                .Replace("Microsoft-Windows-", "")
-                .Replace("/Operational", "")
-                .Replace("/Admin", " (Admin)")
-                .Replace("/Analytic", " (Analytic)")
-                .Replace("/Debug", " (Debug)")
-                .Replace("-", " ");
-        }
-
-        // Existing helper methods (unchanged)
-        private static string GetTopLevelCategory(string logName)
+        // Helper methods for parsing log names based on physical file structure
+        private string GetTopLevelCategory(string logName)
         {
             if (logName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
                 return "Microsoft";
 
+            if (logName.StartsWith("CrowdStrike-", StringComparison.OrdinalIgnoreCase))
+                return "CrowdStrike";
+
+            // For other vendors, extract the first part
             var parts = logName.Split('-', '/');
-            return parts.Length > 0 ? parts[0] : "Other";
+            if (parts.Length > 1)
+                return parts[0];
+
+            return "Other";
         }
 
-        private static string GetLogDisplayName(string logName)
+        private string GetWindowsComponent(string logName)
         {
-            return logName.Replace("/Operational", "")
-                         .Replace("/Admin", " (Admin)")
-                         .Replace("/Analytic", " (Analytic)")
-                         .Replace("/Debug", " (Debug)")
-                         .Replace("-", " ");
-        }
-
-        private static bool ShouldShowNonWindowsMicrosoftLog(string logName)
-        {
-            // Show all non-Windows Microsoft logs that pass the main filtering
-            // The main filtering in EventLogService already handles the visibility logic
-            return true;
-        }
-
-        private static bool ShouldShowStandaloneLog(string logName)
-        {
-            // These are the allowed standalone logs based on your EventViewerVisibleLogs.json
-            var allowedStandalone = new[]
+            // Extract component from Microsoft-Windows-Component/LogType
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
             {
-                // Remove CrowdStrike from standalone - it should be grouped
-                // "CrowdStrike-Falcon Sensor-CSFalconService/Operational", 
-                "OAlerts",
-                "PDQ.com",
-                "PowerShellCore/Operational",
-                "Windows PowerShell"
-            };
+                var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
+                var parts = withoutPrefix.Split('/');
+                return parts[0]; // Component name
+            }
 
-            return allowedStandalone.Any(allowed =>
-                logName.Equals(allowed, StringComparison.OrdinalIgnoreCase));
+            return "Other";
+        }
+
+        private string GetLogType(string logName)
+        {
+            // Extract log type (Operational, Admin, etc.) from Component/LogType
+            var parts = logName.Split('/');
+            return parts.Length > 1 ? parts[^1] : "Operational";
+        }
+
+        private string GetDisplayName(string logName)
+        {
+            // Create a friendly display name
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
+            {
+                var withoutPrefix = logName.Substring("Microsoft-Windows-".Length);
+                return withoutPrefix.Replace("/", " - ").Replace("-", " ");
+            }
+
+            // For other logs, just clean up the name
+            return logName.Replace("/", " - ").Replace("-", " ");
+        }
+
+        private bool IsWindowsLog(string logName)
+        {
+            return logName.Equals("Application", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("Security", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("Setup", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("System", StringComparison.OrdinalIgnoreCase) ||
+                   logName.Equals("ForwardedEvents", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

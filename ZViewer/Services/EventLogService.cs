@@ -146,6 +146,13 @@ namespace ZViewer.Services
                                 continue;
                             }
 
+                            // Additional filtering: Skip known phantom channels
+                            if (IsPhantomChannel(logName))
+                            {
+                                filtered++;
+                                continue;
+                            }
+
                             // Try to access the log to ensure it's readable
                             try
                             {
@@ -248,6 +255,25 @@ namespace ZViewer.Services
                 // If we can't get the configuration, assume it's not redirecting
                 return false;
             }
+        }
+
+        private static bool IsPhantomChannel(string logName)
+        {
+            // These are phantom channels that should be filtered out
+            // They typically redirect to Application.evtx or don't have their own files
+            var phantomPatterns = new string[]
+            {
+                "AirSpaceChannel",
+                "MediaFoundation",
+                "IHM_DebugChannel",
+                "General Logging",
+                "ForwardedEvents",
+                "CrowdStrike-Falcon Sensor-CSFalconService/Operational" // This should be handled specially
+            };
+
+            return phantomPatterns.Any(pattern =>
+                logName.StartsWith(pattern, StringComparison.OrdinalIgnoreCase) ||
+                logName.Equals(pattern, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool IsImportantChannel(string logName)

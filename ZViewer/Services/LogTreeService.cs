@@ -491,7 +491,8 @@ namespace ZViewer.Services
             // These are the allowed standalone logs based on your EventViewerVisibleLogs.json
             var allowedStandalone = new[]
             {
-                "CrowdStrike-Falcon Sensor-CSFalconService/Operational",
+                // Remove CrowdStrike from standalone - it should be grouped
+                // "CrowdStrike-Falcon Sensor-CSFalconService/Operational", 
                 "OAlerts",
                 "PDQ.com",
                 "PowerShellCore/Operational",

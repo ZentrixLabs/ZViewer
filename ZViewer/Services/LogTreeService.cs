@@ -223,50 +223,24 @@ namespace ZViewer.Services
 
         private void BuildMicrosoftProductGroup(LogTreeItem parent, string productName, List<string> logs)
         {
-            if (logs.Count == 1)
+            // Always create product folder, even for single logs
+            var productFolder = new LogTreeItem
             {
-                // Single log - add directly with component and log type
-                var componentName = ExtractMicrosoftComponentName(logs[0]);
-                var logType = GetLogType(logs[0]);
+                Name = productName,
+                IsFolder = true,
+                IsExpanded = false
+            };
 
-                if (string.IsNullOrEmpty(componentName))
-                {
-                    parent.Children.Add(new LogTreeItem
-                    {
-                        Name = $"{productName} - {logType}",
-                        Tag = logs[0]
-                    });
-                }
-                else
-                {
-                    parent.Children.Add(new LogTreeItem
-                    {
-                        Name = $"{productName} {componentName} - {logType}",
-                        Tag = logs[0]
-                    });
-                }
+            if (productName == "Windows")
+            {
+                BuildWindowsComponentTree(productFolder, logs);
             }
             else
             {
-                // Multiple logs - create product folder
-                var productFolder = new LogTreeItem
-                {
-                    Name = productName,
-                    IsFolder = true,
-                    IsExpanded = false
-                };
-
-                if (productName == "Windows")
-                {
-                    BuildWindowsComponentTree(productFolder, logs);
-                }
-                else
-                {
-                    BuildNonWindowsProductComponentTree(productFolder, logs);
-                }
-
-                parent.Children.Add(productFolder);
+                BuildNonWindowsProductComponentTree(productFolder, logs);
             }
+
+            parent.Children.Add(productFolder);
         }
 
         private void BuildNonWindowsProductComponentTree(LogTreeItem parent, List<string> logs)
@@ -286,41 +260,29 @@ namespace ZViewer.Services
                 componentGroups[componentName].Add(log);
             }
 
-            // Build each component group
+            // Build each component group - always create folders
             foreach (var componentGroup in componentGroups.OrderBy(x => x.Key))
             {
                 var componentName = componentGroup.Key;
                 var componentLogs = componentGroup.Value;
 
-                if (componentLogs.Count == 1)
+                var componentFolder = new LogTreeItem
                 {
-                    var logType = GetLogType(componentLogs[0]);
-                    parent.Children.Add(new LogTreeItem
+                    Name = componentName,
+                    IsFolder = true,
+                    IsExpanded = false
+                };
+
+                foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
+                {
+                    componentFolder.Children.Add(new LogTreeItem
                     {
-                        Name = componentName == "Main" ? logType : $"{componentName} - {logType}",
-                        Tag = componentLogs[0]
+                        Name = GetLogType(log),
+                        Tag = log
                     });
                 }
-                else
-                {
-                    var componentFolder = new LogTreeItem
-                    {
-                        Name = componentName,
-                        IsFolder = true,
-                        IsExpanded = false
-                    };
 
-                    foreach (var log in componentLogs.OrderBy(l => GetLogType(l)))
-                    {
-                        componentFolder.Children.Add(new LogTreeItem
-                        {
-                            Name = GetLogType(log),
-                            Tag = log
-                        });
-                    }
-
-                    parent.Children.Add(componentFolder);
-                }
+                parent.Children.Add(componentFolder);
             }
         }
 
@@ -590,38 +552,25 @@ namespace ZViewer.Services
 
         private void BuildWindowsComponentGroup(LogTreeItem parent, string componentName, List<string> logs)
         {
-            if (logs.Count == 1)
+            // Always create component folder, even for single logs
+            var componentFolder = new LogTreeItem
             {
-                // Single log - add directly with log type
-                var logType = GetLogType(logs[0]);
-                parent.Children.Add(new LogTreeItem
+                Name = componentName,
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            // Add all log types for this component
+            foreach (var log in logs.OrderBy(l => GetLogType(l)))
+            {
+                componentFolder.Children.Add(new LogTreeItem
                 {
-                    Name = $"{componentName} - {logType}",
-                    Tag = logs[0]
+                    Name = GetLogType(log),
+                    Tag = log
                 });
             }
-            else
-            {
-                // Multiple logs - create component folder
-                var componentFolder = new LogTreeItem
-                {
-                    Name = componentName,
-                    IsFolder = true,
-                    IsExpanded = false
-                };
 
-                // Add all log types for this component
-                foreach (var log in logs.OrderBy(l => GetLogType(l)))
-                {
-                    componentFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = GetLogType(log),
-                        Tag = log
-                    });
-                }
-
-                parent.Children.Add(componentFolder);
-            }
+            parent.Children.Add(componentFolder);
         }
 
         private void BuildCrowdStrikeTree(LogTreeItem parent, List<string> crowdStrikeLogs)
@@ -706,36 +655,24 @@ namespace ZViewer.Services
 
         private void BuildGenericVendorTree(LogTreeItem parent, string vendor, List<string> logs)
         {
-            if (logs.Count == 1)
+            // Always create vendor folder for structured products like OpenSSH, PowerShellCore
+            var vendorFolder = new LogTreeItem
             {
-                // Single log, add directly
-                parent.Children.Add(new LogTreeItem
+                Name = vendor,
+                IsFolder = true,
+                IsExpanded = false
+            };
+
+            foreach (var log in logs.OrderBy(l => GetLogType(l)))
+            {
+                vendorFolder.Children.Add(new LogTreeItem
                 {
-                    Name = GetDisplayName(logs[0]),
-                    Tag = logs[0]
+                    Name = GetLogType(log),
+                    Tag = log
                 });
             }
-            else
-            {
-                // Multiple logs, create vendor folder
-                var vendorFolder = new LogTreeItem
-                {
-                    Name = vendor,
-                    IsFolder = true,
-                    IsExpanded = false
-                };
 
-                foreach (var log in logs.OrderBy(l => l))
-                {
-                    vendorFolder.Children.Add(new LogTreeItem
-                    {
-                        Name = GetDisplayName(log),
-                        Tag = log
-                    });
-                }
-
-                parent.Children.Add(vendorFolder);
-            }
+            parent.Children.Add(vendorFolder);
         }
 
         // Helper methods for parsing log names based on physical file structure

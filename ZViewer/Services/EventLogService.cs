@@ -104,7 +104,7 @@ namespace ZViewer.Services
             // Example: Microsoft-Windows-Kernel-PnP%4Configuration
             // Return: Microsoft-Windows-Kernel-PnP/Configuration
 
-            var parts = fileName.Split('%');
+            var parts = fileName.Split(new string[] { "%4" }, StringSplitOptions.None);
             string baseName = parts[0];
             string logType = parts.Length > 1 ? parts[1] : "Operational";
 
@@ -114,7 +114,7 @@ namespace ZViewer.Services
         private string ParseVendorLogName(string fileName)
         {
             // Handle vendor-specific logs like "CrowdStrike-Falcon Sensor-CSFalconService%4Operational"
-            var parts = fileName.Split('%');
+            var parts = fileName.Split(new string[] { "%4" }, StringSplitOptions.None);
             string baseName = parts[0];
             string logType = parts.Length > 1 ? parts[1] : "Operational";
 

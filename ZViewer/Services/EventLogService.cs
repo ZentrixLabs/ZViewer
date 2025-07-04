@@ -259,31 +259,34 @@ namespace ZViewer.Services
 
         private static bool IsPhantomChannel(string logName)
         {
-            // These are phantom channels that should be filtered out
-            // They typically redirect to Application.evtx or don't have their own files
-            var phantomPatterns = new string[]
+            // These are specific phantom channels that should be filtered out
+            // Be very specific to avoid over-filtering
+            var phantomChannels = new string[]
             {
                 "AirSpaceChannel",
-                "MediaFoundation",
+                "MediaFoundationVideoProc",
+                "MediaFoundationVideoProcD3D",
+                "MF_MediaFoundationDeviceMFT",
+                "MF_MediaFoundationDeviceProxy",
+                "MF_MediaFoundationFrameServer",
                 "IHM_DebugChannel",
                 "General Logging",
-                "ForwardedEvents",
-                "CrowdStrike-Falcon Sensor-CSFalconService/Operational" // This should be handled specially
+                "muxencode",
+                "Network Isolation Operational"
+                // DO NOT include CrowdStrike here - it should be shown
             };
 
-            return phantomPatterns.Any(pattern =>
-                logName.StartsWith(pattern, StringComparison.OrdinalIgnoreCase) ||
-                logName.Equals(pattern, StringComparison.OrdinalIgnoreCase));
+            // Only filter exact matches for phantom channels
+            return phantomChannels.Any(phantom =>
+                logName.Equals(phantom, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool IsImportantChannel(string logName)
         {
-            // These channels redirect to standard logs but should still be shown
-            // because they represent important logical groupings
+            // These channels should always be shown even if they redirect to standard logs
             var importantChannels = new string[]
             {
-                // Add specific important channels here if needed
-                // Most channels that redirect to Application.evtx should be hidden
+                "CrowdStrike-Falcon Sensor-CSFalconService/Operational" // Always keep CrowdStrike
             };
 
             return importantChannels.Any(channel =>

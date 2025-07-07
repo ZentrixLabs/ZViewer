@@ -42,7 +42,8 @@ namespace ZViewer.Services
                         }
 
                         // Create new watcher
-                        var query = new EventLogQuery(logName, PathType.LogName);
+                        var actualLogName = GetActualLogName(logName);
+                        var query = new EventLogQuery(actualLogName, PathType.LogName);
                         watcher = new EventLogWatcher(query);
 
                         watcher.EventRecordWritten += (sender, e) =>
@@ -187,6 +188,16 @@ namespace ZViewer.Services
             catch { }
 
             return $"Event ID {eventRecord.Id} (Description unavailable)";
+        }
+
+        private string GetActualLogName(string logName)
+        {
+            // Handle standard Windows logs that might need special casing
+            return logName switch
+            {
+                "All" => "Application", // Default to Application for "All"
+                _ => logName
+            };
         }
 
         public void Dispose()

@@ -50,7 +50,7 @@ namespace ZViewer.ViewModels
         // Current Selection
         private string _currentLogFilter = "";
         private string _currentLogDisplayText = "No log selected";
-        private DateTime _currentStartTime = DateTime.Now.AddHours(-4);
+        private DateTime _currentStartTime = DateTime.Now.AddHours(-4); // Start with 4 hours for performance
         private string _currentTimeRange = "4 Hours";
 
         // Data State
@@ -535,9 +535,15 @@ namespace ZViewer.ViewModels
 
             try
             {
+                var syncContext = SynchronizationContext.Current;
+                if (syncContext == null)
+                {
+                    throw new InvalidOperationException("SynchronizationContext is not available.");
+                }
+
                 _monitoringSubscription = _eventMonitorService
                     .MonitorLog(_currentLogFilter)
-                    .ObserveOnDispatcher()
+                    .ObserveOn(syncContext)
                     .Subscribe(
                         newEvent =>
                         {
@@ -733,15 +739,20 @@ namespace ZViewer.ViewModels
                 if (obj is not EventLogEntryViewModel entry) return false;
 
                 // Level filter
-                var levelMatch = criteria.Level switch
+                bool levelMatch = true;
+                if (criteria.IncludeCritical || criteria.IncludeError || criteria.IncludeWarning ||
+                    criteria.IncludeInformation || criteria.IncludeVerbose)
                 {
-                    "Critical" => criteria.IncludeCritical,
-                    "Error" => criteria.IncludeError,
-                    "Warning" => criteria.IncludeWarning,
-                    "Information" => criteria.IncludeInformation,
-                    "Verbose" => criteria.IncludeVerbose,
-                    _ => true
-                };
+                    levelMatch = entry.Level switch
+                    {
+                        "Critical" => criteria.IncludeCritical,
+                        "Error" => criteria.IncludeError,
+                        "Warning" => criteria.IncludeWarning,
+                        "Information" => criteria.IncludeInformation,
+                        "Verbose" => criteria.IncludeVerbose,
+                        _ => false
+                    };
+                }
 
                 if (!levelMatch) return false;
 

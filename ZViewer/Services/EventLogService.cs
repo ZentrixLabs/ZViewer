@@ -26,10 +26,10 @@ namespace ZViewer.Services
             _loggingService = loggingService;
             _options = options;
 
-            // Configure retry policy
+            // Configure retry policy - only retry on truly transient errors
             _retryPolicy = Policy
-                .Handle<EventLogException>()
-                .Or<EventLogNotFoundException>()
+                .Handle<IOException>()
+                .Or<TimeoutException>()
                 .WaitAndRetryAsync(
                     3,
                     retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
@@ -45,62 +45,107 @@ namespace ZViewer.Services
 
         public async Task<IEnumerable<string>> GetAvailableLogsAsync()
         {
-            return await _retryPolicy.ExecuteAsync(async () =>
+            return await Task.Run(() =>
             {
-                return await Task.Run(() =>
+                var logs = new List<string>();
+
+                try
                 {
-                    var logs = new List<string>();
+                    _loggingService.LogInformation("Getting available event logs using EventLogSession");
 
-                    try
+                    // Get all event logs using the Windows API
+                    using (var session = new EventLogSession())
                     {
-                        _loggingService.LogInformation("Starting physical log file enumeration from {Path}", _eventLogPath);
+                        var logNames = session.GetLogNames();
 
-                        if (!Directory.Exists(_eventLogPath))
-                        {
-                            _loggingService.LogError("Event log directory does not exist: {Path}", _eventLogPath);
-                            return GetFallbackLogs();
-                        }
-
-                        var evtxFiles = Directory.GetFiles(_eventLogPath, "*.evtx", SearchOption.TopDirectoryOnly);
-                        _loggingService.LogInformation("Found {Count} .evtx files", evtxFiles.Length);
-
-                        foreach (var filePath in evtxFiles)
+                        foreach (var logName in logNames)
                         {
                             try
                             {
-                                var fileInfo = new FileInfo(filePath);
-                                var fileName = Path.GetFileNameWithoutExtension(fileInfo.Name);
-
-                                // Skip files that are too small (likely empty)
-                                if (fileInfo.Length < 1024)
-                                    continue;
-
-                                var logName = ParseLogName(fileName);
-                                if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
+                                // Try to get log configuration to see if it's accessible
+                                using (var config = new EventLogConfiguration(logName))
                                 {
-                                    logs.Add(logName);
+                                    // Only include enabled logs
+                                    if (config.IsEnabled)
+                                    {
+                                        logs.Add(logName);
+                                    }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                _loggingService.LogWarning("Failed to process log file {FilePath}: {Error}", filePath, ex.Message);
+                                _loggingService.LogWarning("Cannot access log {LogName}: {Error}", logName, ex.Message);
                             }
                         }
+                    }
 
-                        _loggingService.LogInformation("Successfully processed {Count} physical log files", logs.Count);
+                    _loggingService.LogInformation("Found {Count} accessible event logs", logs.Count);
 
-                        // Ensure we always have the basic Windows logs
-                        EnsureBasicWindowsLogs(logs);
+                    // Ensure we always have the basic Windows logs
+                    EnsureBasicWindowsLogs(logs);
 
-                        return logs.Distinct().OrderBy(l => l).ToList();
+                    return logs.Distinct().OrderBy(l => l).ToList();
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogError(ex, "Failed to enumerate event logs, falling back to file system scan");
+                    return GetAvailableLogsFromFileSystem();
+                }
+            });
+        }
+
+        private List<string> GetAvailableLogsFromFileSystem()
+        {
+            var logs = new List<string>();
+
+            try
+            {
+                _loggingService.LogInformation("Starting physical log file enumeration from {Path}", _eventLogPath);
+
+                if (!Directory.Exists(_eventLogPath))
+                {
+                    _loggingService.LogError("Event log directory does not exist: {Path}", _eventLogPath);
+                    return GetFallbackLogs();
+                }
+
+                var evtxFiles = Directory.GetFiles(_eventLogPath, "*.evtx", SearchOption.TopDirectoryOnly);
+                _loggingService.LogInformation("Found {Count} .evtx files", evtxFiles.Length);
+
+                foreach (var filePath in evtxFiles)
+                {
+                    try
+                    {
+                        var fileInfo = new FileInfo(filePath);
+                        var fileName = Path.GetFileNameWithoutExtension(fileInfo.Name);
+
+                        // Skip files that are too small (likely empty)
+                        if (fileInfo.Length < 1024)
+                            continue;
+
+                        var logName = ParseLogName(fileName);
+                        if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
+                        {
+                            logs.Add(logName);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        _loggingService.LogError(ex, "Failed to enumerate event logs");
-                        return GetFallbackLogs();
+                        _loggingService.LogWarning("Failed to process log file {FilePath}: {Error}", filePath, ex.Message);
                     }
-                });
-            });
+                }
+
+                _loggingService.LogInformation("Successfully processed {Count} physical log files", logs.Count);
+
+                // Ensure we always have the basic Windows logs
+                EnsureBasicWindowsLogs(logs);
+
+                return logs.Distinct().OrderBy(l => l).ToList();
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError(ex, "Failed to enumerate event logs from file system");
+                return GetFallbackLogs();
+            }
         }
 
         // New streaming method for better performance
@@ -109,9 +154,10 @@ namespace ZViewer.Services
             DateTime startTime,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            var query = BuildEventQuery(logName, startTime);
+            var actualLogName = GetActualLogName(logName);
+            var query = BuildEventQuery(actualLogName, startTime);
 
-            await foreach (var entry in StreamEventsInternalAsync(query, logName, cancellationToken))
+            await foreach (var entry in StreamEventsInternalAsync(query, actualLogName, cancellationToken))
             {
                 yield return entry;
             }
@@ -161,30 +207,115 @@ namespace ZViewer.Services
                             logName,
                             pageSize);
 
-                        var query = BuildEventQuery(logName, startTime);
+                        // Handle standard Windows logs
+                        var actualLogName = GetActualLogName(logName);
+                        _loggingService.LogInformation("Actual log name resolved to: {ActualLogName}", actualLogName);
+
+                        // Try without a query first to see if that works
+                        var query = "*"; // Simple wildcard query
+                        _loggingService.LogInformation("Using query: {Query}", query);
+
                         var events = new List<EventLogEntry>();
                         var hasMorePages = false;
 
-                        using (var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query)))
+                        try
                         {
-                            // Skip to the right page
-                            var skipCount = pageNumber * pageSize;
-                            for (int i = 0; i < skipCount; i++)
+                            // Use a time-based query for performance, but with proper syntax
+                            var endTime = DateTime.Now;
+                            var adjustedStartTime = startTime;
+
+                            // If the time range is too large, limit it for performance
+                            if ((endTime - startTime).TotalDays > 7)
                             {
-                                if (reader.ReadEvent() == null) break;
+                                adjustedStartTime = endTime.AddDays(-7);
+                                _loggingService.LogInformation("Limiting query to last 7 days for performance");
                             }
 
-                            // Read the page
-                            EventRecord? eventRecord;
-                            int count = 0;
-                            while (count < pageSize && (eventRecord = reader.ReadEvent()) != null)
-                            {
-                                events.Add(ConvertEventRecord(eventRecord));
-                                count++;
-                            }
+                            var timeStr = adjustedStartTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                            var queryString = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
 
-                            // Check if there's more
-                            hasMorePages = reader.ReadEvent() != null;
+                            _loggingService.LogInformation("Using time-limited query: {Query}", queryString);
+
+                            var eventQuery = new EventLogQuery(actualLogName, PathType.LogName, queryString)
+                            {
+                                ReverseDirection = true // Read newest events first
+                            };
+
+                            using (var reader = new EventLogReader(eventQuery))
+                            {
+                                // Set the reader to go backwards (most recent first)
+                                // This avoids issues with old events
+
+                                // Skip to the right page
+                                var skipCount = pageNumber * pageSize;
+                                var skipped = 0;
+
+                                while (skipped < skipCount)
+                                {
+                                    EventRecord? skipEvent = null;
+                                    try
+                                    {
+                                        skipEvent = reader.ReadEvent();
+                                        if (skipEvent == null) break;
+                                        skipped++;
+                                    }
+                                    finally
+                                    {
+                                        skipEvent?.Dispose();
+                                    }
+                                }
+
+                                // Read the page
+                                int count = 0;
+                                DateTime cutoffTime = adjustedStartTime;
+
+                                while (count < pageSize)
+                                {
+                                    EventRecord? eventRecord = null;
+                                    try
+                                    {
+                                        eventRecord = reader.ReadEvent();
+                                        if (eventRecord == null) break;
+
+                                        // Since we're reading in reverse, check if we've gone too far back
+                                        if (eventRecord.TimeCreated.HasValue && eventRecord.TimeCreated.Value < cutoffTime)
+                                        {
+                                            // We've reached events older than our cutoff
+                                            break;
+                                        }
+
+                                        events.Add(ConvertEventRecord(eventRecord));
+                                        count++;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _loggingService.LogWarning("Error reading event: {Error}", ex.Message);
+                                        break;
+                                    }
+                                    finally
+                                    {
+                                        eventRecord?.Dispose();
+                                    }
+                                }
+
+                                // Check if there's more
+                                EventRecord? nextEvent = null;
+                                try
+                                {
+                                    nextEvent = reader.ReadEvent();
+                                    hasMorePages = nextEvent != null;
+                                }
+                                finally
+                                {
+                                    nextEvent?.Dispose();
+                                }
+                            }
+                        }
+                        catch (EventLogException ele)
+                        {
+                            _loggingService.LogError("EventLogException: {Error}", ele.Message);
+                            // Try alternative approach - direct file access
+                            throw;
                         }
 
                         return new PagedEventResult
@@ -263,8 +394,9 @@ namespace ZViewer.Services
                 {
                     try
                     {
-                        var query = BuildEventQuery(logName, startTime);
-                        using var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
+                        var actualLogName = GetActualLogName(logName);
+                        var query = BuildEventQuery(actualLogName, startTime);
+                        using var reader = new EventLogReader(new EventLogQuery(actualLogName, PathType.LogName, query));
 
                         long count = 0;
                         while (reader.ReadEvent() != null)
@@ -285,10 +417,35 @@ namespace ZViewer.Services
 
         #region Private Helper Methods
 
+        private string GetActualLogName(string logName)
+        {
+            // Map common display names to actual Windows log names
+            var logMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "Application", "Application" },
+                { "System", "System" },
+                { "Security", "Security" },
+                { "Setup", "Setup" },
+                { "ForwardedEvents", "ForwardedEvents" },
+                { "All", "Application" } // Default to Application for "All"
+            };
+
+            // If it's a standard Windows log, use the mapping
+            if (logMappings.TryGetValue(logName, out var mappedName))
+            {
+                return mappedName;
+            }
+
+            // For other logs, they should already have the correct format from ParseLogName
+            return logName;
+        }
+
         private string BuildEventQuery(string logName, DateTime startTime)
         {
-            var timeCondition = $"TimeCreated[@SystemTime>='{startTime.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}']";
-            return $"*[System[{timeCondition}]]";
+            // Build a simple query - just get events from the start time
+            // Using a simpler format that's more compatible
+            var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+            return $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
         }
 
         private static List<string> GetFallbackLogs()
@@ -310,13 +467,19 @@ namespace ZViewer.Services
 
         private static string ParseLogName(string fileName)
         {
-            // Handle special cases
-            return fileName switch
+            // Preserve the original structure with proper separators
+            var logName = fileName
+                .Replace("%4", "/")
+                .Replace(".evtx", "");
+
+            // Handle special cases where we need to maintain the hyphen structure
+            if (logName.StartsWith("Microsoft-Windows-", StringComparison.OrdinalIgnoreCase))
             {
-                "Microsoft-Windows-PowerShell%4Operational" => "Windows PowerShell",
-                "Microsoft-Windows-TaskScheduler%4Operational" => "Task Scheduler",
-                _ => fileName.Replace("%4", "/").Replace("-", " ")
-            };
+                return logName;
+            }
+
+            // For other logs, keep the original format
+            return logName;
         }
 
         private static bool ShouldIncludeLog(string fileName, FileInfo fileInfo)
@@ -342,7 +505,6 @@ namespace ZViewer.Services
                 Source = eventRecord.ProviderName ?? "Unknown",
                 EventId = eventRecord.Id,
                 Level = GetLevelDisplayName(eventRecord.Level),
-                User = GetSafeUser(eventRecord),
                 TimeCreated = eventRecord.TimeCreated ?? DateTime.MinValue,
                 TaskCategory = GetSafeTaskCategory(eventRecord),
                 Description = GetSafeDescription(eventRecord),
@@ -361,18 +523,6 @@ namespace ZViewer.Services
                 5 => "Verbose",
                 _ => "Information"
             };
-        }
-
-        private static string GetSafeUser(EventRecord eventRecord)
-        {
-            try
-            {
-                return eventRecord.UserId?.Value ?? "N/A";
-            }
-            catch
-            {
-                return "N/A";
-            }
         }
 
         private static string GetSafeTaskCategory(EventRecord eventRecord)

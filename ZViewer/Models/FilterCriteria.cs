@@ -13,5 +13,7 @@
         public string Keywords { get; set; } = string.Empty;
         public string User { get; set; } = string.Empty;
         public string Computer { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public string Level { get; set; } = string.Empty;
     }
 }

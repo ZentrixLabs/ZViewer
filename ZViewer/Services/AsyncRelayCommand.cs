@@ -57,7 +57,7 @@ namespace ZViewer.ViewModels
             await ExecuteAsync(parameter);
         }
 
-        public async Task ExecuteAsync(object parameter)
+        public async Task ExecuteAsync(object? parameter)
         {
             if (CanExecute(parameter))
             {

@@ -140,16 +140,19 @@ namespace ZViewer.Services
             {
                 var eventIdProperty = Expression.Property(parameter, "EventId");
                 var methodInfo = typeof(IFilterService).GetMethod(nameof(MatchesEventIdFilter));
-                var thisExpression = Expression.Constant(this);
-                var filterExpression = Expression.Constant(criteria.EventIds);
+                if (methodInfo != null)
+                {
+                    var thisExpression = Expression.Constant(this);
+                    var filterExpression = Expression.Constant(criteria.EventIds);
 
-                var eventIdCheck = Expression.Call(
-                    thisExpression,
-                    methodInfo,
-                    eventIdProperty,
-                    filterExpression);
+                    var eventIdCheck = Expression.Call(
+                        thisExpression,
+                        methodInfo,
+                        eventIdProperty,
+                        filterExpression);
 
-                body = CombineAnd(body, eventIdCheck);
+                    body = CombineAnd(body, eventIdCheck);
+                }
             }
 
             // Source filtering
@@ -157,13 +160,16 @@ namespace ZViewer.Services
             {
                 var sourceProperty = Expression.Property(parameter, "Source");
                 var containsMethod = typeof(string).GetMethod("Contains", new[] { typeof(string), typeof(StringComparison) });
-                var sourceCheck = Expression.Call(
-                    sourceProperty,
-                    containsMethod,
-                    Expression.Constant(criteria.Source),
-                    Expression.Constant(StringComparison.OrdinalIgnoreCase));
+                if (containsMethod != null)
+                {
+                    var sourceCheck = Expression.Call(
+                        sourceProperty,
+                        containsMethod,
+                        Expression.Constant(criteria.Source),
+                        Expression.Constant(StringComparison.OrdinalIgnoreCase));
 
-                body = CombineAnd(body, sourceCheck);
+                    body = CombineAnd(body, sourceCheck);
+                }
             }
 
             // Keywords filtering
@@ -171,22 +177,16 @@ namespace ZViewer.Services
             {
                 var descProperty = Expression.Property(parameter, "Description");
                 var containsMethod = typeof(string).GetMethod("Contains", new[] { typeof(string), typeof(StringComparison) });
-                var keywordCheck = Expression.Call(
-                    descProperty,
-                    containsMethod,
-                    Expression.Constant(criteria.Keywords),
-                    Expression.Constant(StringComparison.OrdinalIgnoreCase));
+                if (containsMethod != null)
+                {
+                    var keywordCheck = Expression.Call(
+                        descProperty,
+                        containsMethod,
+                        Expression.Constant(criteria.Keywords),
+                        Expression.Constant(StringComparison.OrdinalIgnoreCase));
 
-                body = CombineAnd(body, keywordCheck);
-            }
-
-            // User filtering
-            if (!string.IsNullOrWhiteSpace(criteria.User) &&
-                !criteria.User.Equals("<All Users>", StringComparison.OrdinalIgnoreCase))
-            {
-                var userProperty = Expression.Property(parameter, "User");
-                var userCheck = Expression.Equal(userProperty, Expression.Constant(criteria.User));
-                body = CombineAnd(body, userCheck);
+                    body = CombineAnd(body, keywordCheck);
+                }
             }
 
             // Computer filtering

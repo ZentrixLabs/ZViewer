@@ -122,26 +122,24 @@ namespace ZViewer.Services
             string logName,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            await Task.Run(async () =>
+            EventLogReader? reader = null;
+            try
             {
-                EventLogReader? reader = null;
-                try
-                {
-                    reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
+                reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
 
-                    EventRecord? eventRecord;
-                    while ((eventRecord = reader.ReadEvent()) != null && !cancellationToken.IsCancellationRequested)
-                    {
-                        var entry = ConvertEventRecord(eventRecord);
-                        await Task.Yield(); // Allow other operations
-                        yield return entry;
-                    }
-                }
-                finally
+                await Task.Yield(); // Initial yield to make it truly async
+
+                EventRecord? eventRecord;
+                while ((eventRecord = reader.ReadEvent()) != null && !cancellationToken.IsCancellationRequested)
                 {
-                    reader?.Dispose();
+                    var entry = ConvertEventRecord(eventRecord);
+                    yield return entry;
                 }
-            }, cancellationToken);
+            }
+            finally
+            {
+                reader?.Dispose();
+            }
         }
 
         // Enhanced paged loading with retry policy

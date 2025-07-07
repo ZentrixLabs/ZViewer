@@ -139,7 +139,6 @@ namespace ZViewer.Services
                 Source = eventRecord.ProviderName ?? "Unknown",
                 EventId = eventRecord.Id,
                 Level = GetLevelDisplayName(eventRecord.Level),
-                User = GetSafeUser(eventRecord),
                 TimeCreated = eventRecord.TimeCreated ?? DateTime.MinValue,
                 TaskCategory = GetSafeTaskCategory(eventRecord),
                 Description = GetSafeDescription(eventRecord),
@@ -158,18 +157,6 @@ namespace ZViewer.Services
                 5 => "Verbose",
                 _ => "Information"
             };
-        }
-
-        private static string GetSafeUser(EventRecord eventRecord)
-        {
-            try
-            {
-                return eventRecord.UserId?.Value ?? "N/A";
-            }
-            catch
-            {
-                return "N/A";
-            }
         }
 
         private static string GetSafeTaskCategory(EventRecord eventRecord)

@@ -1,0 +1,42 @@
+﻿<Window x:Class="ZViewer.Views.ExportOptionsDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Export Options" Height="300" Width="400"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <TextBlock Grid.Row="0" Text="Select Export Format" FontSize="16" FontWeight="Bold" Margin="0,0,0,20"/>
+
+        <!-- Format Selection -->
+        <GroupBox Grid.Row="1" Header="Export Format" Margin="0,0,0,20">
+            <StackPanel Margin="10">
+                <RadioButton Name="EvtxRadio" Content="EVTX - Windows Event Log Format" IsChecked="True" Margin="0,5"/>
+                <RadioButton Name="XmlRadio" Content="XML - Extensible Markup Language" Margin="0,5"/>
+                <RadioButton Name="CsvRadio" Content="CSV - Comma Separated Values" Margin="0,5"/>
+                <RadioButton Name="JsonRadio" Content="JSON - JavaScript Object Notation" Margin="0,5"/>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- Options -->
+        <GroupBox Grid.Row="2" Header="Export Options" Margin="0,0,0,20">
+            <StackPanel Margin="10">
+                <CheckBox Name="FilteredCheckBox" Content="Export only filtered/visible events" IsChecked="False" Margin="0,5"/>
+                <TextBlock Text="Note: Large exports may take several minutes" FontStyle="Italic" Foreground="Gray" Margin="0,10,0,0"/>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Name="ExportButton" Content="Export" Width="75" Height="25" Margin="0,0,10,0" IsDefault="True" Click="ExportButton_Click"/>
+            <Button Name="CancelButton" Content="Cancel" Width="75" Height="25" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

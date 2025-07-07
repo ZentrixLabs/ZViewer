@@ -1,4 +1,7 @@
-﻿using ZViewer.Models;
+﻿using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using ZViewer.Models;
 
 namespace ZViewer.Services
 {
@@ -10,5 +13,6 @@ namespace ZViewer.Services
         Task<IEnumerable<string>> GetAvailableLogsAsync();
         Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
         Task<long> GetTotalEventCountAsync(string logName, DateTime startTime);
+        Task<PagedEventResult> LoadEventsPagedAsync(string logName, DateTime startTime, int pageSize, int pageNumber);
     }
 }

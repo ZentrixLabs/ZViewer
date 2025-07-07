@@ -3,7 +3,12 @@ using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 using ZViewer.Models;
 
 namespace ZViewer.Services
@@ -11,240 +16,237 @@ namespace ZViewer.Services
     public class EventLogService : IEventLogService
     {
         private readonly ILoggingService _loggingService;
+        private readonly IOptions<ZViewerOptions> _options;
         private readonly string _eventLogPath = @"C:\Windows\System32\winevt\Logs";
 
-        public EventLogService(ILoggingService loggingService)
+        private readonly AsyncRetryPolicy _retryPolicy;
+
+        public EventLogService(ILoggingService loggingService, IOptions<ZViewerOptions> options)
         {
             _loggingService = loggingService;
+            _options = options;
+
+            // Configure retry policy
+            _retryPolicy = Policy
+                .Handle<EventLogException>()
+                .Or<EventLogNotFoundException>()
+                .WaitAndRetryAsync(
+                    3,
+                    retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
+                    onRetry: (exception, timespan, retryCount, context) =>
+                    {
+                        _loggingService.LogWarning(
+                            "Retry {RetryCount} after {Delay}ms due to {Error}",
+                            retryCount,
+                            timespan.TotalMilliseconds,
+                            exception.Message);
+                    });
         }
 
         public async Task<IEnumerable<string>> GetAvailableLogsAsync()
         {
-            return await Task.Run(() =>
+            return await _retryPolicy.ExecuteAsync(async () =>
             {
-                var logs = new List<string>();
-
-                try
+                return await Task.Run(() =>
                 {
-                    _loggingService.LogInformation("Starting physical log file enumeration from {Path}", _eventLogPath);
+                    var logs = new List<string>();
 
-                    if (!Directory.Exists(_eventLogPath))
+                    try
                     {
-                        _loggingService.LogError("Event log directory does not exist: {Path}", _eventLogPath);
-                        return GetFallbackLogs();
-                    }
+                        _loggingService.LogInformation("Starting physical log file enumeration from {Path}", _eventLogPath);
 
-                    var evtxFiles = Directory.GetFiles(_eventLogPath, "*.evtx", SearchOption.TopDirectoryOnly);
-                    _loggingService.LogInformation("Found {Count} .evtx files", evtxFiles.Length);
-
-                    foreach (var filePath in evtxFiles)
-                    {
-                        try
+                        if (!Directory.Exists(_eventLogPath))
                         {
-                            var fileInfo = new FileInfo(filePath);
-                            var fileName = Path.GetFileNameWithoutExtension(fileInfo.Name);
+                            _loggingService.LogError("Event log directory does not exist: {Path}", _eventLogPath);
+                            return GetFallbackLogs();
+                        }
 
-                            // Skip files that are too small (likely empty)
-                            if (fileInfo.Length < 1024)
-                                continue;
+                        var evtxFiles = Directory.GetFiles(_eventLogPath, "*.evtx", SearchOption.TopDirectoryOnly);
+                        _loggingService.LogInformation("Found {Count} .evtx files", evtxFiles.Length);
 
-                            var logName = ParseLogName(fileName);
-                            if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
+                        foreach (var filePath in evtxFiles)
+                        {
+                            try
                             {
-                                logs.Add(logName);
+                                var fileInfo = new FileInfo(filePath);
+                                var fileName = Path.GetFileNameWithoutExtension(fileInfo.Name);
+
+                                // Skip files that are too small (likely empty)
+                                if (fileInfo.Length < 1024)
+                                    continue;
+
+                                var logName = ParseLogName(fileName);
+                                if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
+                                {
+                                    logs.Add(logName);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggingService.LogWarning("Failed to process log file {FilePath}: {Error}", filePath, ex.Message);
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            _loggingService.LogWarning("Failed to process log file {FilePath}: {Error}", filePath, ex.Message);
-                        }
+
+                        _loggingService.LogInformation("Successfully processed {Count} physical log files", logs.Count);
+
+                        // Ensure we always have the basic Windows logs
+                        EnsureBasicWindowsLogs(logs);
+
+                        return logs.Distinct().OrderBy(l => l).ToList();
                     }
-
-                    _loggingService.LogInformation("Successfully processed {Count} physical log files", logs.Count);
-
-                    // Ensure we always have the basic Windows logs
-                    EnsureBasicWindowsLogs(logs);
-
-                    return logs.Distinct().OrderBy(l => l).ToList();
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogError(ex, "Failed to enumerate physical log files");
-                    return GetFallbackLogs();
-                }
+                    catch (Exception ex)
+                    {
+                        _loggingService.LogError(ex, "Failed to enumerate event logs");
+                        return GetFallbackLogs();
+                    }
+                });
             });
         }
 
-        private string ParseLogName(string fileName)
+        // New streaming method for better performance
+        public async IAsyncEnumerable<EventLogEntry> StreamEventsAsync(
+            string logName,
+            DateTime startTime,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            // Handle special cases first
-            if (IsStandardWindowsLog(fileName))
+            var query = BuildEventQuery(logName, startTime);
+
+            await foreach (var entry in StreamEventsInternalAsync(query, logName, cancellationToken))
             {
-                return fileName;
-            }
-
-            // Parse Microsoft structured logs
-            if (fileName.StartsWith("Microsoft-", StringComparison.OrdinalIgnoreCase))
-            {
-                return ParseMicrosoftLogName(fileName);
-            }
-
-            // Handle other vendor logs
-            if (fileName.Contains("-") || fileName.Contains("%4"))
-            {
-                return ParseVendorLogName(fileName);
-            }
-
-            // Simple log name (no structure)
-            return fileName;
-        }
-
-        private string ParseMicrosoftLogName(string fileName)
-        {
-            // Example: Microsoft-Windows-Kernel-PnP%4Configuration
-            // Return: Microsoft-Windows-Kernel-PnP/Configuration
-
-            var parts = fileName.Split(new string[] { "%4" }, StringSplitOptions.None);
-            string baseName = parts[0];
-            string logType = parts.Length > 1 ? parts[1] : "Operational";
-
-            return $"{baseName}/{logType}";
-        }
-
-        private string ParseVendorLogName(string fileName)
-        {
-            // Handle vendor-specific logs like "CrowdStrike-Falcon Sensor-CSFalconService%4Operational"
-            var parts = fileName.Split(new string[] { "%4" }, StringSplitOptions.None);
-            string baseName = parts[0];
-            string logType = parts.Length > 1 ? parts[1] : "Operational";
-
-            return $"{baseName}/{logType}";
-        }
-
-        private bool IsStandardWindowsLog(string fileName)
-        {
-            var standardLogs = new[] { "Application", "System", "Security", "Setup", "ForwardedEvents" };
-            return standardLogs.Contains(fileName, StringComparer.OrdinalIgnoreCase);
-        }
-
-        private bool ShouldIncludeLog(string fileName, FileInfo fileInfo)
-        {
-            // Skip very small files (likely empty)
-            if (fileInfo.Length < 1024)
-                return false;
-
-            // Skip debug/analytic logs that are typically hidden
-            if (fileName.EndsWith("%4Debug", StringComparison.OrdinalIgnoreCase) ||
-                fileName.EndsWith("%4Analytic", StringComparison.OrdinalIgnoreCase))
-            {
-                // Only include if they have recent activity
-                return fileInfo.LastWriteTime > DateTime.Now.AddDays(-30);
-            }
-
-            // Skip ETL files converted to EVTX (these are usually debug channels)
-            if (fileName.Contains("CHANNEL") || fileName.Contains("_DebugChannel"))
-                return false;
-
-            return true;
-        }
-
-        private void EnsureBasicWindowsLogs(List<string> logs)
-        {
-            var basicLogs = new[] { "Application", "System", "Security", "Setup" };
-            foreach (var basicLog in basicLogs)
-            {
-                if (!logs.Contains(basicLog))
-                {
-                    logs.Add(basicLog);
-                }
+                yield return entry;
             }
         }
 
-        private List<string> GetFallbackLogs()
+        private async IAsyncEnumerable<EventLogEntry> StreamEventsInternalAsync(
+            string query,
+            string logName,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
         {
-            return new List<string> { "Application", "System", "Security", "Setup" };
-        }
-
-        // Existing methods remain the same but we'll add a new method to get physical log info
-        public async Task<PhysicalLogInfo?> GetPhysicalLogInfoAsync(string logName)
-        {
-            return await Task.Run(() =>
+            await Task.Run(async () =>
             {
+                EventLogReader? reader = null;
                 try
                 {
-                    var fileName = ConvertLogNameToFileName(logName);
-                    var filePath = Path.Combine(_eventLogPath, fileName + ".evtx");
+                    reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
 
-                    if (!File.Exists(filePath))
-                        return null;
-
-                    var fileInfo = new FileInfo(filePath);
-                    return new PhysicalLogInfo
+                    EventRecord? eventRecord;
+                    while ((eventRecord = reader.ReadEvent()) != null && !cancellationToken.IsCancellationRequested)
                     {
-                        LogName = logName,
-                        FileName = fileName,
-                        FullPath = filePath,
-                        FileSize = fileInfo.Length,
-                        LastWriteTime = fileInfo.LastWriteTime,
-                        IsAccessible = true
-                    };
+                        var entry = ConvertEventRecord(eventRecord);
+                        await Task.Yield(); // Allow other operations
+                        yield return entry;
+                    }
                 }
-                catch (Exception ex)
+                finally
                 {
-                    _loggingService.LogWarning("Failed to get physical log info for {LogName}: {Error}", logName, ex.Message);
-                    return null;
+                    reader?.Dispose();
                 }
+            }, cancellationToken);
+        }
+
+        // Enhanced paged loading with retry policy
+        public async Task<PagedEventResult> LoadEventsPagedAsync(
+            string logName,
+            DateTime startTime,
+            int pageSize,
+            int pageNumber)
+        {
+            return await _retryPolicy.ExecuteAsync(async () =>
+            {
+                return await Task.Run(() =>
+                {
+                    try
+                    {
+                        _loggingService.LogInformation(
+                            "Loading page {Page} of {LogName} with size {PageSize}",
+                            pageNumber,
+                            logName,
+                            pageSize);
+
+                        var query = BuildEventQuery(logName, startTime);
+                        var events = new List<EventLogEntry>();
+                        var hasMorePages = false;
+
+                        using (var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query)))
+                        {
+                            // Skip to the right page
+                            var skipCount = pageNumber * pageSize;
+                            for (int i = 0; i < skipCount; i++)
+                            {
+                                if (reader.ReadEvent() == null) break;
+                            }
+
+                            // Read the page
+                            EventRecord? eventRecord;
+                            int count = 0;
+                            while (count < pageSize && (eventRecord = reader.ReadEvent()) != null)
+                            {
+                                events.Add(ConvertEventRecord(eventRecord));
+                                count++;
+                            }
+
+                            // Check if there's more
+                            hasMorePages = reader.ReadEvent() != null;
+                        }
+
+                        return new PagedEventResult
+                        {
+                            Events = events,
+                            PageNumber = pageNumber,
+                            PageSize = pageSize,
+                            HasMorePages = hasMorePages,
+                            TotalEventsInPage = events.Count
+                        };
+                    }
+                    catch (EventLogNotFoundException ex)
+                    {
+                        throw new EventLogAccessException(logName, $"Event log '{logName}' not found", ex);
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        throw new EventLogAccessException(logName, $"Access denied to event log '{logName}'", ex);
+                    }
+                });
             });
         }
 
-        private string ConvertLogNameToFileName(string logName)
+        public async Task<IEnumerable<EventLogEntry>> LoadEventsAsync(
+            string logName,
+            DateTime startTime,
+            IProgress<LoadingProgress>? progress = null)
         {
-            // Convert back from parsed log name to file name
-            if (IsStandardWindowsLog(logName))
-                return logName;
-
-            // Convert Microsoft-Windows-Kernel-PnP/Configuration back to Microsoft-Windows-Kernel-PnP%4Configuration
-            return logName.Replace("/", "%4");
-        }
-
-        // All existing methods remain the same
-        public async Task<IEnumerable<EventLogEntry>> LoadEventsAsync(string logName, DateTime startTime, IProgress<LoadingProgress>? progress = null)
-        {
-            var result = await LoadEventsPagedAsync(logName, startTime, 1000, 0);
+            var result = await LoadEventsPagedAsync(logName, startTime, _options.Value.MaxExportSize, 0);
             return result.Events;
         }
 
-        public async Task<IEnumerable<EventLogEntry>> LoadAllEventsAsync(DateTime startTime, IProgress<LoadingProgress>? progress = null)
+        public async Task<IEnumerable<EventLogEntry>> LoadAllEventsAsync(
+            DateTime startTime,
+            IProgress<LoadingProgress>? progress = null)
         {
             var allLogs = await GetAvailableLogsAsync();
             return await LoadEventsAsync(allLogs, startTime, progress);
         }
 
-        public async Task<IEnumerable<EventLogEntry>> LoadEventsAsync(IEnumerable<string> logNames, DateTime startTime, IProgress<LoadingProgress>? progress = null)
+        public async Task<IEnumerable<EventLogEntry>> LoadEventsAsync(
+            IEnumerable<string> logNames,
+            DateTime startTime,
+            IProgress<LoadingProgress>? progress = null)
         {
             var allEvents = new List<EventLogEntry>();
-            var logNamesList = logNames.ToList();
+            var logList = logNames.ToList();
 
-            for (int i = 0; i < logNamesList.Count; i++)
+            for (int i = 0; i < logList.Count; i++)
             {
-                var logName = logNamesList[i];
-                try
+                progress?.Report(new LoadingProgress
                 {
-                    var events = await LoadEventsAsync(logName, startTime);
-                    allEvents.AddRange(events);
+                    CurrentLog = logList[i],
+                    LogIndex = i + 1,
+                    TotalLogs = logList.Count,
+                    Message = $"Loading {logList[i]}..."
+                });
 
-                    progress?.Report(new LoadingProgress
-                    {
-                        CurrentLog = logName,
-                        LogIndex = i,
-                        TotalLogs = logNamesList.Count,
-                        Message = $"Loaded {logName}"
-                    });
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogWarning("Failed to load events from log {LogName}: {Error}", logName, ex.Message);
-                }
+                var events = await LoadEventsAsync(logList[i], startTime);
+                allEvents.AddRange(events);
             }
 
             return allEvents.OrderByDescending(e => e.TimeCreated);
@@ -252,115 +254,97 @@ namespace ZViewer.Services
 
         public async Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime)
         {
-            return await Task.Run(() =>
-            {
-                try
-                {
-                    var query = $"*[System[TimeCreated[@SystemTime >= '{startTime:yyyy-MM-ddTHH:mm:ss.000Z}']]]";
-                    var eventLogQuery = new EventLogQuery(logName, PathType.LogName, query);
-                    using var reader = new EventLogReader(eventLogQuery);
-
-                    long count = 0;
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-
-                    while (reader.ReadEvent() != null)
-                    {
-                        count++;
-                        if (sw.ElapsedMilliseconds > 10000 || count >= 100000)
-                        {
-                            if (count >= 100000)
-                            {
-                                var timeSpan = DateTime.UtcNow - startTime.ToUniversalTime();
-                                var estimatedTotal = (long)(count * (timeSpan.TotalHours / (sw.ElapsedMilliseconds / 3600000.0)));
-                                return Math.Min(estimatedTotal, 10000000);
-                            }
-                            break;
-                        }
-                    }
-
-                    return count;
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogWarning("Could not estimate event count for {LogName}: {Error}", logName, ex.Message);
-                    return 0;
-                }
-            });
+            return await GetTotalEventCountAsync(logName, startTime);
         }
 
         public async Task<long> GetTotalEventCountAsync(string logName, DateTime startTime)
         {
-            return await GetEstimatedEventCountAsync(logName, startTime);
-        }
-
-        // Helper method for the new LoadEventsPagedAsync that the existing code references
-        public async Task<PagedEventResult> LoadEventsPagedAsync(string logName, DateTime startTime, int pageSize, int skip)
-        {
-            return await Task.Run(() =>
+            return await _retryPolicy.ExecuteAsync(async () =>
             {
-                var events = new List<EventLogEntry>();
-
-                try
+                return await Task.Run(() =>
                 {
-                    var query = $"*[System[TimeCreated[@SystemTime >= '{startTime:yyyy-MM-ddTHH:mm:ss.000Z}']]]";
-                    var eventLogQuery = new EventLogQuery(logName, PathType.LogName, query);
-                    using var reader = new EventLogReader(eventLogQuery);
-
-                    EventRecord eventRecord;
-                    int currentIndex = 0;
-                    int collected = 0;
-
-                    while ((eventRecord = reader.ReadEvent()) != null && collected < pageSize)
+                    try
                     {
-                        try
+                        var query = BuildEventQuery(logName, startTime);
+                        using var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
+
+                        long count = 0;
+                        while (reader.ReadEvent() != null)
                         {
-                            if (currentIndex >= skip)
-                            {
-                                var eventEntry = ConvertToEventLogEntry(eventRecord);
-                                events.Add(eventEntry);
-                                collected++;
-                            }
-                            currentIndex++;
+                            count++;
                         }
-                        finally
-                        {
-                            eventRecord?.Dispose();
-                        }
+
+                        return count;
                     }
-
-                    bool hasMore = eventRecord != null;
-                    return new PagedEventResult
+                    catch (Exception ex)
                     {
-                        Events = events.OrderByDescending(e => e.TimeCreated),
-                        HasMorePages = hasMore,
-                        PageNumber = skip / pageSize,
-                        PageSize = pageSize,
-                        TotalEventsInPage = events.Count
-                    };
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogError(ex, "Failed to load events from log {LogName}", logName);
-                    return new PagedEventResult
-                    {
-                        Events = events,
-                        HasMorePages = false,
-                        PageNumber = 0,
-                        PageSize = pageSize,
-                        TotalEventsInPage = 0
-                    };
-                }
+                        _loggingService.LogWarning("Failed to count events in {LogName}: {Error}", logName, ex.Message);
+                        return -1;
+                    }
+                });
             });
         }
 
-        private EventLogEntry ConvertToEventLogEntry(EventRecord eventRecord)
+        #region Private Helper Methods
+
+        private string BuildEventQuery(string logName, DateTime startTime)
+        {
+            var timeCondition = $"TimeCreated[@SystemTime>='{startTime.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}']";
+            return $"*[System[{timeCondition}]]";
+        }
+
+        private static List<string> GetFallbackLogs()
+        {
+            return new List<string> { "Application", "System", "Security", "Setup" };
+        }
+
+        private static void EnsureBasicWindowsLogs(List<string> logs)
+        {
+            var basicLogs = new[] { "Application", "System", "Security", "Setup" };
+            foreach (var log in basicLogs)
+            {
+                if (!logs.Contains(log, StringComparer.OrdinalIgnoreCase))
+                {
+                    logs.Add(log);
+                }
+            }
+        }
+
+        private static string ParseLogName(string fileName)
+        {
+            // Handle special cases
+            return fileName switch
+            {
+                "Microsoft-Windows-PowerShell%4Operational" => "Windows PowerShell",
+                "Microsoft-Windows-TaskScheduler%4Operational" => "Task Scheduler",
+                _ => fileName.Replace("%4", "/").Replace("-", " ")
+            };
+        }
+
+        private static bool ShouldIncludeLog(string fileName, FileInfo fileInfo)
+        {
+            // Skip archived logs
+            if (fileName.Contains("Archive", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Skip backup files
+            if (fileName.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Include if file was modified recently (within last year)
+            return fileInfo.LastWriteTime > DateTime.Now.AddYears(-1);
+        }
+
+        private EventLogEntry ConvertEventRecord(EventRecord eventRecord)
         {
             return new EventLogEntry
             {
-                LogName = eventRecord.LogName,
-                Source = eventRecord.ProviderName,
+                Index = eventRecord.RecordId ?? 0,
+                LogName = eventRecord.LogName ?? "Unknown",
+                Source = eventRecord.ProviderName ?? "Unknown",
                 EventId = eventRecord.Id,
                 Level = GetLevelDisplayName(eventRecord.Level),
+                User = GetSafeUser(eventRecord),
                 TimeCreated = eventRecord.TimeCreated ?? DateTime.MinValue,
                 TaskCategory = GetSafeTaskCategory(eventRecord),
                 Description = GetSafeDescription(eventRecord),
@@ -379,6 +363,18 @@ namespace ZViewer.Services
                 5 => "Verbose",
                 _ => "Information"
             };
+        }
+
+        private static string GetSafeUser(EventRecord eventRecord)
+        {
+            try
+            {
+                return eventRecord.UserId?.Value ?? "N/A";
+            }
+            catch
+            {
+                return "N/A";
+            }
         }
 
         private static string GetSafeTaskCategory(EventRecord eventRecord)
@@ -414,37 +410,22 @@ namespace ZViewer.Services
 
             return $"Event ID {eventRecord.Id} (Description unavailable due to missing provider metadata)";
         }
+
+        #endregion
     }
 
-    // Add this class to support the physical log info
-    public class PhysicalLogInfo
+    #region Exception Classes
+
+    public class EventLogAccessException : Exception
     {
-        public string LogName { get; set; } = string.Empty;
-        public string FileName { get; set; } = string.Empty;
-        public string FullPath { get; set; } = string.Empty;
-        public long FileSize { get; set; }
-        public DateTime LastWriteTime { get; set; }
-        public bool IsAccessible { get; set; }
-        public int? RecordCount { get; set; }
+        public string LogName { get; }
+
+        public EventLogAccessException(string logName, string message, Exception inner)
+            : base(message, inner)
+        {
+            LogName = logName;
+        }
     }
 
-    // Models for paging support that are referenced by existing code
-    public class PagedEventResult
-    {
-        public IEnumerable<EventLogEntry> Events { get; set; } = Enumerable.Empty<EventLogEntry>();
-        public int PageNumber { get; set; }
-        public int PageSize { get; set; }
-        public bool HasMorePages { get; set; }
-        public int TotalEventsInPage { get; set; }
-    }
-
-    public class LoadingProgress
-    {
-        public string CurrentLog { get; set; } = string.Empty;
-        public int LogIndex { get; set; }
-        public int TotalLogs { get; set; }
-        public int EventsProcessed { get; set; }
-        public string Message { get; set; } = string.Empty;
-        public int PercentComplete => TotalLogs > 0 ? (LogIndex * 100) / TotalLogs : 0;
-    }
+    #endregion
 }

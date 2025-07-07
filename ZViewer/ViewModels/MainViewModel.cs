@@ -1,11 +1,22 @@
-﻿using System.Windows.Input;
+﻿using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Disposables;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Input;
+using Microsoft.Extensions.Options;
 using ZViewer.Models;
 using ZViewer.Services;
-using System.IO;
 
 namespace ZViewer.ViewModels
 {
-    public class MainViewModel : ViewModelBase
+    public sealed class MainViewModel : ViewModelBase, IDisposable
     {
         #region Fields
         private readonly IEventLogService _eventLogService;
@@ -15,10 +26,17 @@ namespace ZViewer.ViewModels
         private readonly IExportService _exportService;
         private readonly ILogPropertiesService _logPropertiesService;
         private readonly ILogTreeService _logTreeService;
+        private readonly IEventMonitorService _eventMonitorService;
+        private readonly IFilterService _filterService;
+        private readonly IOptions<ZViewerOptions> _options;
         private readonly CollectionViewSource _collectionViewSource;
+        private readonly CompositeDisposable _disposables = new();
 
         private EventLogEntryViewModel? _selectedEvent;
         private FilterCriteria? _currentFilter;
+        private CancellationTokenSource? _searchCancellation;
+        private IDisposable? _monitoringSubscription;
+        private Timer? _autoRefreshTimer;
 
         // UI State
         private string _statusText = "Ready - Select a log to view events";
@@ -26,11 +44,13 @@ namespace ZViewer.ViewModels
         private bool _isLoadingTree;
         private bool _showProgress;
         private int _progressValue;
+        private string _searchText = string.Empty;
+        private bool _isMonitoring;
 
         // Current Selection
         private string _currentLogFilter = "";
         private string _currentLogDisplayText = "No log selected";
-        private DateTime _currentStartTime = DateTime.Now.AddHours(-4); // Start with 4 hours for performance
+        private DateTime _currentStartTime = DateTime.Now.AddHours(-4);
         private string _currentTimeRange = "4 Hours";
 
         // Data State
@@ -40,7 +60,7 @@ namespace ZViewer.ViewModels
 
         // Paging State
         private int _currentPage = 0;
-        private int _pageSize = 1000;
+        private int _pageSize;
         private bool _hasMorePages;
         private string _pageInfo = "";
         private long _totalEventCount = -1;
@@ -78,6 +98,32 @@ namespace ZViewer.ViewModels
             get => _progressValue;
             set => SetProperty(ref _progressValue, value);
         }
+
+        public string SearchText
+        {
+            get => _searchText;
+            set
+            {
+                if (SetProperty(ref _searchText, value))
+                {
+                    _ = DebounceSearchAsync();
+                }
+            }
+        }
+
+        public bool IsMonitoring
+        {
+            get => _isMonitoring;
+            set
+            {
+                if (SetProperty(ref _isMonitoring, value))
+                {
+                    OnPropertyChanged(nameof(MonitoringButtonText));
+                }
+            }
+        }
+
+        public string MonitoringButtonText => IsMonitoring ? "Stop Monitoring" : "Start Monitoring";
 
         // Current Selection Properties
         public string CurrentLogDisplayText
@@ -141,38 +187,43 @@ namespace ZViewer.ViewModels
 
         #region Commands
         // Navigation Commands
-        public ICommand LogSelectedCommand { get; private set; } = null!;
-        public ICommand RefreshCommand { get; private set; } = null!;
+        public IAsyncCommand<string> LogSelectedCommand { get; private set; } = null!;
+        public IAsyncCommand RefreshCommand { get; private set; } = null!;
 
         // Time Range Commands
-        public ICommand Load24HoursCommand { get; private set; } = null!;
-        public ICommand Load7DaysCommand { get; private set; } = null!;
-        public ICommand Load30DaysCommand { get; private set; } = null!;
+        public IAsyncCommand Load24HoursCommand { get; private set; } = null!;
+        public IAsyncCommand Load7DaysCommand { get; private set; } = null!;
+        public IAsyncCommand Load30DaysCommand { get; private set; } = null!;
         public ICommand LoadCustomRangeCommand { get; private set; } = null!;
 
         // Paging Commands
-        public ICommand LoadNextPageCommand { get; private set; } = null!;
-        public ICommand LoadPreviousPageCommand { get; private set; } = null!;
-        public ICommand RefreshCurrentPageCommand { get; private set; } = null!;
+        public IAsyncCommand LoadNextPageCommand { get; private set; } = null!;
+        public IAsyncCommand LoadPreviousPageCommand { get; private set; } = null!;
+        public IAsyncCommand RefreshCurrentPageCommand { get; private set; } = null!;
 
         // Filter Commands
         public ICommand ShowFilterDialogCommand { get; private set; } = null!;
         public ICommand ClearFilterCommand { get; private set; } = null!;
+        public ICommand ClearSearchCommand { get; private set; } = null!;
 
         // Export Commands
-        public ICommand ExportCommand { get; private set; } = null!;
-        public ICommand SaveAllEventsCommand { get; private set; } = null!;
-        public ICommand SaveFilteredEventsCommand { get; private set; } = null!;
+        public IAsyncCommand ExportCommand { get; private set; } = null!;
+        public IAsyncCommand SaveAllEventsCommand { get; private set; } = null!;
+        public IAsyncCommand SaveFilteredEventsCommand { get; private set; } = null!;
 
-        // Legacy Commands
-        public ICommand FilterCommand { get; private set; } = null!;
+        // Monitoring Commands
+        public ICommand ToggleMonitoringCommand { get; private set; } = null!;
+
+        // Settings Commands
+        public ICommand ToggleAutoRefreshCommand { get; private set; } = null!;
         #endregion
 
         #region Constructor
         public MainViewModel(IEventLogService eventLogService, ILoggingService loggingService,
                     IErrorService errorService, IXmlFormatterService xmlFormatterService,
                     IExportService exportService, ILogPropertiesService logPropertiesService,
-                    ILogTreeService logTreeService)
+                    ILogTreeService logTreeService, IEventMonitorService eventMonitorService,
+                    IFilterService filterService, IOptions<ZViewerOptions> options)
         {
             // Dependency injection
             _eventLogService = eventLogService;
@@ -182,6 +233,12 @@ namespace ZViewer.ViewModels
             _exportService = exportService;
             _logPropertiesService = logPropertiesService;
             _logTreeService = logTreeService;
+            _eventMonitorService = eventMonitorService;
+            _filterService = filterService;
+            _options = options;
+
+            // Initialize page size from configuration
+            _pageSize = _options.Value.DefaultPageSize;
 
             // Initialize collections
             EventEntries = new ObservableCollection<EventLogEntryViewModel>();
@@ -193,6 +250,12 @@ namespace ZViewer.ViewModels
             // Subscribe to events
             _errorService.StatusUpdated += (_, status) => StatusText = status;
 
+            // Initialize auto-refresh if enabled
+            if (_options.Value.EnableAutoRefresh)
+            {
+                SetupAutoRefresh();
+            }
+
             // Initialize UI
             _ = InitializeAsync();
         }
@@ -200,40 +263,49 @@ namespace ZViewer.ViewModels
         private void InitializeCommands()
         {
             // Navigation Commands
-            LogSelectedCommand = new RelayCommand<string>(async (logName) => await OnLogSelectedAsync(logName));
-            RefreshCommand = new RelayCommand(async () => await RefreshAsync(),
+            LogSelectedCommand = new AsyncRelayCommand<string>(OnLogSelectedAsync);
+            RefreshCommand = new AsyncRelayCommand(RefreshAsync,
                 () => !IsLoading && !string.IsNullOrEmpty(_currentLogFilter));
 
             // Time Range Commands
-            Load24HoursCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-1), "24 Hours"),
+            Load24HoursCommand = new AsyncRelayCommand(
+                () => LoadTimeRangeAsync(DateTime.Now.AddDays(-1), "24 Hours"),
                 () => !IsLoading && !string.IsNullOrEmpty(_currentLogFilter));
-            Load7DaysCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-7), "7 Days"),
+            Load7DaysCommand = new AsyncRelayCommand(
+                () => LoadTimeRangeAsync(DateTime.Now.AddDays(-7), "7 Days"),
                 () => !IsLoading && !string.IsNullOrEmpty(_currentLogFilter));
-            Load30DaysCommand = new RelayCommand(async () => await LoadTimeRangeAsync(DateTime.Now.AddDays(-30), "30 Days"),
+            Load30DaysCommand = new AsyncRelayCommand(
+                () => LoadTimeRangeAsync(DateTime.Now.AddDays(-30), "30 Days"),
                 () => !IsLoading && !string.IsNullOrEmpty(_currentLogFilter));
             LoadCustomRangeCommand = new RelayCommand(ShowCustomDateRangeDialog,
                 () => !IsLoading && !string.IsNullOrEmpty(_currentLogFilter));
 
             // Paging Commands
-            LoadNextPageCommand = new RelayCommand(async () => await LoadNextPageAsync(),
+            LoadNextPageCommand = new AsyncRelayCommand(LoadNextPageAsync,
                 () => !IsLoading && HasMorePages);
-            LoadPreviousPageCommand = new RelayCommand(async () => await LoadPreviousPageAsync(),
+            LoadPreviousPageCommand = new AsyncRelayCommand(LoadPreviousPageAsync,
                 () => !IsLoading && _currentPage > 0);
-            RefreshCurrentPageCommand = new RelayCommand(async () => await LoadCurrentPageAsync(),
+            RefreshCurrentPageCommand = new AsyncRelayCommand(LoadCurrentPageAsync,
                 () => !IsLoading && HasEventsLoaded);
 
             // Filter Commands
             ShowFilterDialogCommand = new RelayCommand<Window>(ShowFilterDialog);
             ClearFilterCommand = new RelayCommand(ClearFilter);
+            ClearSearchCommand = new RelayCommand(() => SearchText = string.Empty);
 
             // Export Commands
-            ExportCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Export functionality coming soon!"));
-            SaveAllEventsCommand = new RelayCommand(async () => await SaveAllEventsAsync(), () => HasEventsLoaded);
-            SaveFilteredEventsCommand = new RelayCommand(async () => await SaveFilteredEventsAsync(),
+            ExportCommand = new AsyncRelayCommand(ShowExportOptionsAsync);
+            SaveAllEventsCommand = new AsyncRelayCommand(SaveAllEventsAsync,
+                () => HasEventsLoaded);
+            SaveFilteredEventsCommand = new AsyncRelayCommand(SaveFilteredEventsAsync,
                 () => HasEventsLoaded && IsFilterApplied);
 
-            // Legacy Commands
-            FilterCommand = new RelayCommand(async () => await _errorService.ShowInfoAsync("Use right-click menu to filter"));
+            // Monitoring Commands
+            ToggleMonitoringCommand = new RelayCommand(ToggleMonitoring,
+                () => !string.IsNullOrEmpty(_currentLogFilter));
+
+            // Settings Commands
+            ToggleAutoRefreshCommand = new RelayCommand(ToggleAutoRefresh);
         }
         #endregion
 
@@ -252,7 +324,7 @@ namespace ZViewer.ViewModels
 
                 LogTree = await _logTreeService.BuildLogTreeAsync();
 
-                StatusText = "Ready - Select a log to view events (showing most recent 1,000 events per page)";
+                StatusText = $"Ready - Select a log to view events (showing most recent {_pageSize:N0} events per page)";
             }
             catch (Exception ex)
             {
@@ -269,6 +341,9 @@ namespace ZViewer.ViewModels
         private async Task OnLogSelectedAsync(string? logName)
         {
             if (string.IsNullOrEmpty(logName)) return;
+
+            // Stop monitoring if active
+            StopMonitoring();
 
             _currentLogFilter = logName;
             ResetPagingState();
@@ -290,9 +365,11 @@ namespace ZViewer.ViewModels
 
                 StatusText = $"Loading page {_currentPage + 1} of {_currentLogFilter} events...";
 
-                // Cast to access paging methods
-                var pagedService = _eventLogService as EventLogService;
-                var result = await pagedService!.LoadEventsPagedAsync(_currentLogFilter, _currentStartTime, _pageSize, _currentPage);
+                var result = await _eventLogService.LoadEventsPagedAsync(
+                    _currentLogFilter,
+                    _currentStartTime,
+                    _pageSize,
+                    _currentPage);
 
                 ProgressValue = 75;
                 StatusText = "Processing events...";
@@ -316,51 +393,53 @@ namespace ZViewer.ViewModels
                 }
 
                 UpdatePageInfo();
-                ApplyCurrentFilter();
 
-                var displayCount = EventsView.Cast<object>().Count();
-                StatusText = $"Loaded {EventEntries.Count:N0} events (page {_currentPage + 1}), showing {displayCount:N0}";
-
-                if (HasMorePages)
+                // Apply search if active
+                if (!string.IsNullOrWhiteSpace(SearchText))
                 {
-                    StatusText += " - Use Next Page button to load more";
+                    ApplySearch(SearchText);
                 }
 
-                _loggingService.LogInformation("Successfully loaded page {Page} with {Count} events from {LogName}",
-                    _currentPage + 1, EventEntries.Count, _currentLogFilter);
+                StatusText = EventEntries.Count > 0
+                    ? $"Loaded {EventEntries.Count} events from {_currentLogFilter}"
+                    : $"No events found in {_currentLogFilter} for the selected time range";
+
+                ProgressValue = 100;
+            }
+            catch (EventLogAccessException ex)
+            {
+                _errorService.HandleError(ex, $"Cannot access {ex.LogName} log");
+                ClearEvents();
             }
             catch (Exception ex)
             {
-                _errorService.HandleError(ex, $"Loading {_currentLogFilter} events page {_currentPage + 1}");
-                StatusText = $"Error loading {_currentLogFilter} events";
+                _errorService.HandleError(ex, "Failed to load events");
+                ClearEvents();
             }
             finally
             {
                 IsLoading = false;
                 ShowProgress = false;
-                ProgressValue = 0;
+                CommandManager.InvalidateRequerySuggested();
             }
         }
 
         private async Task CountTotalEventsAsync()
         {
-            if (string.IsNullOrEmpty(_currentLogFilter) || _currentLogFilter == "All")
-                return;
+            if (string.IsNullOrEmpty(_currentLogFilter)) return;
 
             try
             {
                 _isCountingEvents = true;
                 OnPropertyChanged(nameof(IsCountingEvents));
-                UpdatePageInfo();
 
-                var pagedService = _eventLogService as EventLogService;
-                _totalEventCount = await pagedService!.GetTotalEventCountAsync(_currentLogFilter, _currentStartTime);
+                _totalEventCount = await _eventLogService.GetTotalEventCountAsync(_currentLogFilter, _currentStartTime);
 
-                UpdatePageInfo();
-
-                if (_totalEventCount > 0)
+                if (_totalEventCount >= 0)
                 {
-                    if (_totalEventCount > 999999)
+                    UpdatePageInfo();
+
+                    if (_totalEventCount > 1000000)
                     {
                         StatusText = $"Found {_totalEventCount / 1000000.0:F1}M total events in {_currentLogFilter} log";
                     }
@@ -379,6 +458,157 @@ namespace ZViewer.ViewModels
             {
                 _isCountingEvents = false;
                 OnPropertyChanged(nameof(IsCountingEvents));
+            }
+        }
+        #endregion
+
+        #region Search
+        private async Task DebounceSearchAsync()
+        {
+            _searchCancellation?.Cancel();
+            _searchCancellation = new CancellationTokenSource();
+
+            var searchText = _searchText;
+            var token = _searchCancellation.Token;
+
+            try
+            {
+                await Task.Delay(_options.Value.SearchDebounceMs, token);
+
+                if (!token.IsCancellationRequested && searchText == _searchText)
+                {
+                    ApplySearch(searchText);
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                // Expected when search is updated
+            }
+        }
+
+        private void ApplySearch(string searchText)
+        {
+            if (string.IsNullOrWhiteSpace(searchText))
+            {
+                _collectionViewSource.View.Filter = null;
+                StatusText = HasEventsLoaded ? $"Showing {EventEntries.Count} events" : StatusText;
+                return;
+            }
+
+            _collectionViewSource.View.Filter = obj =>
+            {
+                if (obj is EventLogEntryViewModel entry)
+                {
+                    return entry.Description.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+                           entry.Source.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+                           entry.EventId.ToString().Contains(searchText) ||
+                           entry.Level.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+                }
+                return false;
+            };
+
+            var visibleCount = _collectionViewSource.View.Cast<object>().Count();
+            StatusText = $"Found {visibleCount} events matching '{searchText}'";
+        }
+        #endregion
+
+        #region Monitoring
+        private void ToggleMonitoring()
+        {
+            if (IsMonitoring)
+            {
+                StopMonitoring();
+            }
+            else
+            {
+                StartMonitoring();
+            }
+        }
+
+        private void StartMonitoring()
+        {
+            if (string.IsNullOrEmpty(_currentLogFilter) || _currentLogFilter == "All")
+            {
+                _errorService.HandleError("Please select a specific log to monitor", "Monitoring");
+                return;
+            }
+
+            try
+            {
+                _monitoringSubscription = _eventMonitorService
+                    .MonitorLog(_currentLogFilter)
+                    .ObserveOnDispatcher()
+                    .Subscribe(
+                        newEvent =>
+                        {
+                            // Add new event at the beginning
+                            EventEntries.Insert(0, new EventLogEntryViewModel(newEvent));
+
+                            // Remove oldest if over limit
+                            while (EventEntries.Count > _pageSize)
+                            {
+                                EventEntries.RemoveAt(EventEntries.Count - 1);
+                            }
+
+                            StatusText = $"New event: {newEvent.Source} - Event ID {newEvent.EventId}";
+                        },
+                        error =>
+                        {
+                            _errorService.HandleError(error, "Monitoring error");
+                            StopMonitoring();
+                        });
+
+                IsMonitoring = true;
+                StatusText = $"Monitoring {_currentLogFilter} for new events...";
+            }
+            catch (Exception ex)
+            {
+                _errorService.HandleError(ex, "Failed to start monitoring");
+            }
+        }
+
+        private void StopMonitoring()
+        {
+            _monitoringSubscription?.Dispose();
+            _monitoringSubscription = null;
+            IsMonitoring = false;
+            StatusText = "Monitoring stopped";
+        }
+        #endregion
+
+        #region Auto-Refresh
+        private void SetupAutoRefresh()
+        {
+            _autoRefreshTimer = new Timer(
+                async _ => await AutoRefreshAsync(),
+                null,
+                TimeSpan.FromMilliseconds(_options.Value.RefreshInterval),
+                TimeSpan.FromMilliseconds(_options.Value.RefreshInterval));
+        }
+
+        private async Task AutoRefreshAsync()
+        {
+            if (!IsLoading && HasEventsLoaded && !IsMonitoring)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(async () =>
+                {
+                    await LoadCurrentPageAsync();
+                });
+            }
+        }
+
+        private void ToggleAutoRefresh()
+        {
+            if (_autoRefreshTimer != null)
+            {
+                _autoRefreshTimer.Dispose();
+                _autoRefreshTimer = null;
+                StatusText = "Auto-refresh disabled";
+            }
+            else
+            {
+                SetupAutoRefresh();
+                StatusText = $"Auto-refresh enabled ({_options.Value.RefreshInterval / 1000}s)";
             }
         }
         #endregion
@@ -490,7 +720,7 @@ namespace ZViewer.ViewModels
                 return;
             }
 
-            var logName = _currentLogFilter == "All" ? "All Logs" : $"{_currentLogFilter} Log";
+            var logName = _currentLogFilter == "All" ? "All Logs" : _currentLogFilter;
             CurrentLogDisplayText = $"{logName} - {CurrentTimeRange}";
         }
         #endregion
@@ -502,49 +732,36 @@ namespace ZViewer.ViewModels
             {
                 if (obj is not EventLogEntryViewModel entry) return false;
 
-                // Apply current log filter first
-                if (_currentLogFilter != "All" &&
-                    !entry.LogName.Equals(_currentLogFilter, StringComparison.OrdinalIgnoreCase))
-                    return false;
-
                 // Level filter
-                var hasLevelFilter = criteria.IncludeCritical || criteria.IncludeError ||
-                                   criteria.IncludeWarning || criteria.IncludeInformation ||
-                                   criteria.IncludeVerbose;
-
-                if (hasLevelFilter)
+                var levelMatch = criteria.Level switch
                 {
-                    var levelMatches = entry.Level switch
-                    {
-                        "Critical" => criteria.IncludeCritical,
-                        "Error" => criteria.IncludeError,
-                        "Warning" => criteria.IncludeWarning,
-                        "Information" => criteria.IncludeInformation,
-                        "Verbose" => criteria.IncludeVerbose,
-                        _ => false
-                    };
+                    "Critical" => criteria.IncludeCritical,
+                    "Error" => criteria.IncludeError,
+                    "Warning" => criteria.IncludeWarning,
+                    "Information" => criteria.IncludeInformation,
+                    "Verbose" => criteria.IncludeVerbose,
+                    _ => true
+                };
 
-                    if (!levelMatches) return false;
-                }
+                if (!levelMatch) return false;
 
                 // Event ID filter
-                if (!string.IsNullOrEmpty(criteria.EventIds) &&
-                    !criteria.EventIds.Contains("<All Event IDs>"))
+                if (!string.IsNullOrWhiteSpace(criteria.EventIds) &&
+                    !criteria.EventIds.Equals("<All Event IDs>", StringComparison.OrdinalIgnoreCase))
                 {
-                    var ids = criteria.EventIds.Split(',', StringSplitOptions.RemoveEmptyEntries);
-                    if (!ids.Any(id => id.Trim() == entry.EventId.ToString()))
+                    if (!_filterService.MatchesEventIdFilter(entry.EventId, criteria.EventIds))
                         return false;
                 }
 
-                // Task Category filter
-                if (!string.IsNullOrEmpty(criteria.TaskCategory))
+                // Source filter
+                if (!string.IsNullOrWhiteSpace(criteria.Source))
                 {
-                    if (!entry.TaskCategory.Contains(criteria.TaskCategory, StringComparison.OrdinalIgnoreCase))
+                    if (!entry.Source.Contains(criteria.Source, StringComparison.OrdinalIgnoreCase))
                         return false;
                 }
 
                 // Keywords filter
-                if (!string.IsNullOrEmpty(criteria.Keywords))
+                if (!string.IsNullOrWhiteSpace(criteria.Keywords))
                 {
                     if (!entry.Description.Contains(criteria.Keywords, StringComparison.OrdinalIgnoreCase))
                         return false;
@@ -571,7 +788,7 @@ namespace ZViewer.ViewModels
         {
             _currentFilter = null;
             IsFilterApplied = false;
-            ApplyCurrentFilter();
+            _collectionViewSource.View.Filter = null;
 
             var displayCount = _collectionViewSource.View.Cast<object>().Count();
             StatusText = $"Filter cleared - showing {displayCount} events";
@@ -594,27 +811,10 @@ namespace ZViewer.ViewModels
                 IsFilterApplied = true;
             }
         }
-
-        private void ApplyCurrentFilter()
-        {
-            if (_currentLogFilter == "All")
-            {
-                _collectionViewSource.View.Filter = null;
-            }
-            else
-            {
-                _collectionViewSource.View.Filter = obj =>
-                {
-                    if (obj is EventLogEntryViewModel entry)
-                        return entry.LogName.Equals(_currentLogFilter, StringComparison.OrdinalIgnoreCase);
-                    return false;
-                };
-            }
-        }
         #endregion
 
-        #region Export and Actions
-        private async Task SaveAllEventsAsync()
+        #region Export
+        private async Task ShowExportOptionsAsync()
         {
             if (!HasEventsLoaded)
             {
@@ -622,50 +822,128 @@ namespace ZViewer.ViewModels
                 return;
             }
 
-            var fileName = $"{_currentLogFilter}_{DateTime.Now:yyyyMMdd_HHmmss}.evtx";
-            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName);
-
-            if (filePath != null)
+            var dialog = new Views.ExportOptionsDialog
             {
-                var allEvents = EventEntries.Select(vm => vm.GetModel()).ToList();
-                var success = await _exportService.ExportToEvtxAsync(allEvents, filePath, _currentLogFilter);
+                Owner = Application.Current.MainWindow
+            };
 
-                if (success)
+            if (dialog.ShowDialog() == true)
+            {
+                switch (dialog.SelectedFormat)
                 {
-                    StatusText = $"Exported {allEvents.Count} events from current page to {Path.GetFileName(filePath)}";
+                    case ExportFormat.Evtx:
+                        await SaveEventsAsEvtxAsync(dialog.ExportFiltered);
+                        break;
+                    case ExportFormat.Xml:
+                        await SaveEventsAsXmlAsync(dialog.ExportFiltered);
+                        break;
+                    case ExportFormat.Csv:
+                        await SaveEventsAsCsvAsync(dialog.ExportFiltered);
+                        break;
+                    case ExportFormat.Json:
+                        await SaveEventsAsJsonAsync(dialog.ExportFiltered);
+                        break;
                 }
             }
+        }
+
+        private async Task SaveAllEventsAsync()
+        {
+            await SaveEventsAsEvtxAsync(false);
         }
 
         private async Task SaveFilteredEventsAsync()
         {
-            if (!HasEventsLoaded)
-            {
-                await _errorService.ShowInfoAsync("No events loaded to export");
-                return;
-            }
+            await SaveEventsAsEvtxAsync(true);
+        }
 
-            var fileName = $"{_currentLogFilter}_filtered_{DateTime.Now:yyyyMMdd_HHmmss}.evtx";
-            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName);
+        private async Task SaveEventsAsEvtxAsync(bool filtered)
+        {
+            var fileName = $"{_currentLogFilter}_{(filtered ? "filtered_" : "")}{DateTime.Now:yyyyMMdd_HHmmss}.evtx";
+            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName, "Event Log Files (*.evtx)|*.evtx");
 
             if (filePath != null)
             {
-                var filteredEvents = _collectionViewSource.View.Cast<EventLogEntryViewModel>()
-                    .Select(vm => vm.GetModel()).ToList();
-                var success = await _exportService.ExportToEvtxAsync(filteredEvents, filePath, _currentLogFilter);
+                var events = GetEventsToExport(filtered);
+                var success = await _exportService.ExportToEvtxAsync(events, filePath, _currentLogFilter);
 
                 if (success)
                 {
-                    StatusText = $"Exported {filteredEvents.Count} filtered events from current page to {Path.GetFileName(filePath)}";
+                    StatusText = $"Exported {events.Count()} events to {Path.GetFileName(filePath)}";
                 }
             }
         }
 
+        private async Task SaveEventsAsXmlAsync(bool filtered)
+        {
+            var fileName = $"{_currentLogFilter}_{(filtered ? "filtered_" : "")}{DateTime.Now:yyyyMMdd_HHmmss}.xml";
+            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName, "XML Files (*.xml)|*.xml");
+
+            if (filePath != null)
+            {
+                var events = GetEventsToExport(filtered);
+                var success = await _exportService.ExportToXmlAsync(events, filePath);
+
+                if (success)
+                {
+                    StatusText = $"Exported {events.Count()} events to {Path.GetFileName(filePath)}";
+                }
+            }
+        }
+
+        private async Task SaveEventsAsCsvAsync(bool filtered)
+        {
+            var fileName = $"{_currentLogFilter}_{(filtered ? "filtered_" : "")}{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName, "CSV Files (*.csv)|*.csv");
+
+            if (filePath != null)
+            {
+                var events = GetEventsToExport(filtered);
+                var success = await _exportService.ExportToCsvAsync(events, filePath);
+
+                if (success)
+                {
+                    StatusText = $"Exported {events.Count()} events to {Path.GetFileName(filePath)}";
+                }
+            }
+        }
+
+        private async Task SaveEventsAsJsonAsync(bool filtered)
+        {
+            var fileName = $"{_currentLogFilter}_{(filtered ? "filtered_" : "")}{DateTime.Now:yyyyMMdd_HHmmss}.json";
+            var filePath = await _exportService.ShowSaveFileDialogAsync(fileName, "JSON Files (*.json)|*.json");
+
+            if (filePath != null)
+            {
+                var events = GetEventsToExport(filtered);
+                var success = await _exportService.ExportToJsonAsync(events, filePath);
+
+                if (success)
+                {
+                    StatusText = $"Exported {events.Count()} events to {Path.GetFileName(filePath)}";
+                }
+            }
+        }
+
+        private IEnumerable<EventLogEntry> GetEventsToExport(bool filtered)
+        {
+            var viewModels = filtered && (_collectionViewSource.View.Filter != null || !string.IsNullOrWhiteSpace(SearchText))
+                ? _collectionViewSource.View.Cast<EventLogEntryViewModel>()
+                : EventEntries;
+
+            return viewModels.Select(vm => vm.GetModel());
+        }
+        #endregion
+
+        #region Other Actions
         public async Task ShowPropertiesAsync(Window? owner = null)
         {
             try
             {
-                var logName = string.IsNullOrEmpty(_currentLogFilter) || _currentLogFilter == "All" ? "Application" : _currentLogFilter;
+                var logName = string.IsNullOrEmpty(_currentLogFilter) || _currentLogFilter == "All"
+                    ? "Application"
+                    : _currentLogFilter;
+
                 var properties = await _logPropertiesService.GetLogPropertiesAsync(logName);
 
                 var dialog = new Views.LogPropertiesDialog(properties, _logPropertiesService)
@@ -699,6 +977,17 @@ namespace ZViewer.ViewModels
             _hasEventsLoaded = false;
             OnPropertyChanged(nameof(HasEventsLoaded));
             UpdatePageInfo();
+        }
+        #endregion
+
+        #region IDisposable
+        public void Dispose()
+        {
+            _searchCancellation?.Cancel();
+            _searchCancellation?.Dispose();
+            _monitoringSubscription?.Dispose();
+            _autoRefreshTimer?.Dispose();
+            _disposables?.Dispose();
         }
         #endregion
     }

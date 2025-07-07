@@ -1,5 +1,10 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System;
+using System.IO;
+using System.Windows;
 using ZViewer.Services;
 using ZViewer.ViewModels;
 
@@ -12,9 +17,18 @@ namespace ZViewer
         protected override void OnStartup(StartupEventArgs e)
         {
             _host = Host.CreateDefaultBuilder()
+                .ConfigureAppConfiguration((context, config) =>
+                {
+                    config.SetBasePath(Directory.GetCurrentDirectory());
+                    config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+                    config.AddJsonFile($"appsettings.{context.HostingEnvironment.EnvironmentName}.json", optional: true);
+                })
                 .ConfigureServices((context, services) =>
                 {
-                    // Services
+                    // Configuration
+                    services.Configure<ZViewerOptions>(context.Configuration.GetSection("ZViewer"));
+
+                    // Core Services
                     services.AddSingleton<ILoggingService, LoggingService>();
                     services.AddSingleton<IErrorService, ErrorService>();
                     services.AddSingleton<IEventLogService, EventLogService>();
@@ -22,6 +36,11 @@ namespace ZViewer
                     services.AddSingleton<IExportService, ExportService>();
                     services.AddSingleton<ILogPropertiesService, LogPropertiesService>();
                     services.AddSingleton<ILogTreeService, LogTreeService>();
+
+                    // New Services
+                    services.AddSingleton<IEventMonitorService, EventMonitorService>();
+                    services.AddSingleton<IFilterService, FilterService>();
+                    services.AddSingleton<IThemeService, ThemeService>();
 
                     // ViewModels
                     services.AddTransient<MainViewModel>();
@@ -33,9 +52,14 @@ namespace ZViewer
                 {
                     logging.AddConsole();
                     logging.AddDebug();
+                    logging.AddFile("Logs/zviewer-{Date}.log");
                     logging.SetMinimumLevel(LogLevel.Information);
                 })
                 .Build();
+
+            // Initialize theme
+            var themeService = _host.Services.GetRequiredService<IThemeService>();
+            themeService.LoadTheme();
 
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             mainWindow.Show();
@@ -48,5 +72,19 @@ namespace ZViewer
             _host?.Dispose();
             base.OnExit(e);
         }
+    }
+
+    // Configuration Options
+    public class ZViewerOptions
+    {
+        public int DefaultPageSize { get; set; } = 1000;
+        public int MaxExportSize { get; set; } = 100000;
+        public string DefaultTimeRange { get; set; } = "4Hours";
+        public bool EnableAutoRefresh { get; set; } = false;
+        public int RefreshInterval { get; set; } = 30000;
+        public int SearchDebounceMs { get; set; } = 300;
+        public string Theme { get; set; } = "Light";
+        public bool EnableVirtualization { get; set; } = true;
+        public int VirtualizationThreshold { get; set; } = 10000;
     }
 }

@@ -123,6 +123,28 @@ namespace ZViewer.Services
 
                             _loggingService.LogInformation("Successfully created reader using LogName for {LogName}", logName);
                         }
+                        catch (InvalidOperationException ioe)
+                        {
+                            _loggingService.LogWarning("InvalidOperation with time query, trying without time filter: {Error}", ioe.Message);
+
+                            // Try without time filter
+                            try
+                            {
+                                var simpleQuery = new EventLogQuery(logName, PathType.LogName)
+                                {
+                                    ReverseDirection = true
+                                };
+                                reader = new EventLogReader(simpleQuery);
+                                _loggingService.LogInformation("Successfully created reader without time filter for {LogName}", logName);
+
+                                // We'll filter by time in the reading loop
+                            }
+                            catch (Exception ex2)
+                            {
+                                _loggingService.LogWarning("Failed without time filter: {Error}", ex2.Message);
+                                throw;
+                            }
+                        }
                         catch (Exception ex1)
                         {
                             _loggingService.LogWarning("Failed with LogName, trying file path: {Error}", ex1.Message);
@@ -157,14 +179,28 @@ namespace ZViewer.Services
                             }
 
                             // Read events
-                            for (int i = 0; i < pageSize; i++)
+                            int eventsRead = 0;
+                            int eventsChecked = 0;
+                            const int maxChecks = 1000; // Don't check too many events
+
+                            while (eventsRead < pageSize && eventsChecked < maxChecks)
                             {
                                 var evt = reader.ReadEvent();
                                 if (evt == null) break;
 
+                                eventsChecked++;
+
                                 try
                                 {
+                                    // If we're reading in reverse and hit an event before our time range, stop
+                                    if (evt.TimeCreated.HasValue && evt.TimeCreated.Value < startTime)
+                                    {
+                                        evt.Dispose();
+                                        break;
+                                    }
+
                                     events.Add(ConvertEventRecord(evt));
+                                    eventsRead++;
                                 }
                                 finally
                                 {

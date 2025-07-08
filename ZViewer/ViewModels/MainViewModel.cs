@@ -1112,7 +1112,7 @@ namespace ZViewer.ViewModels
     // Optional interface for extended EventLogService functionality
     public interface IEventLogServiceExtended : IEventLogService
     {
+        new Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
         Task<long> GetTotalEventCountAsync(string logName, DateTime startTime, IProgress<long>? progress, CancellationToken cancellationToken);
-        Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
     }
 }

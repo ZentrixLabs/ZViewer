@@ -25,10 +25,61 @@ namespace ZViewer.Services
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _countingOperations = new();
         private readonly ConcurrentDictionary<string, long> _countCache = new();
 
+        // Cache for validated logs
+        private readonly ConcurrentDictionary<string, bool> _validatedLogs = new();
+
         public EventLogService(ILoggingService loggingService, IOptions<ZViewerOptions> options)
         {
             _loggingService = loggingService;
             _options = options;
+        }
+
+        public bool needsRecovery = false;
+        public bool useSimpleQuery = false;
+
+        // New method to validate if a log is accessible
+        private bool IsLogAccessible(string logName)
+        {
+            // Check cache first
+            if (_validatedLogs.TryGetValue(logName, out var isValid))
+            {
+                return isValid;
+            }
+
+            try
+            {
+                using (var session = new EventLogSession())
+                {
+                    using (var config = new EventLogConfiguration(logName, session))
+                    {
+                        // Try to access basic properties to verify accessibility
+                        var isEnabled = config.IsEnabled;
+                        var logMode = config.LogMode;
+
+                        // If we can read these properties, the log is accessible
+                        _validatedLogs[logName] = true;
+                        return true;
+                    }
+                }
+            }
+            catch (EventLogNotFoundException)
+            {
+                _loggingService.LogInformation("Event log '{LogName}' not found", logName);
+                _validatedLogs[logName] = false;
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                _loggingService.LogInformation("Access denied to event log '{LogName}'", logName);
+                _validatedLogs[logName] = false;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogInformation("Cannot access log '{LogName}': {Error}", logName, ex.Message);
+                _validatedLogs[logName] = false;
+                return false;
+            }
         }
 
         public async Task<IEnumerable<string>> GetAvailableLogsAsync()
@@ -50,14 +101,17 @@ namespace ZViewer.Services
                         {
                             try
                             {
-                                // Try to get log configuration to see if it's accessible
-                                using (var config = new EventLogConfiguration(logName))
+                                // Skip problematic logs that often cause WMI errors
+                                if (logName.Contains("Analytic") || logName.Contains("Debug"))
                                 {
-                                    // Only include enabled logs
-                                    if (config.IsEnabled)
-                                    {
-                                        logs.Add(logName);
-                                    }
+                                    _loggingService.LogInformation("Skipping analytic/debug log: {LogName}", logName);
+                                    continue;
+                                }
+
+                                // Use our validation method
+                                if (IsLogAccessible(logName))
+                                {
+                                    logs.Add(logName);
                                 }
                             }
                             catch (Exception ex)
@@ -89,6 +143,20 @@ namespace ZViewer.Services
             int pageSize,
             int pageNumber)
         {
+            // Validate log before attempting to read
+            if (!IsLogAccessible(logName))
+            {
+                _loggingService.LogWarning("Attempted to load events from inaccessible log: {LogName}", logName);
+                return new PagedEventResult
+                {
+                    Events = new List<EventLogEntry>(),
+                    PageNumber = pageNumber,
+                    PageSize = pageSize,
+                    HasMorePages = false,
+                    TotalEventsInPage = 0
+                };
+            }
+
             return await Task.Run(() =>
             {
                 try
@@ -101,6 +169,7 @@ namespace ZViewer.Services
 
                     var events = new List<EventLogEntry>();
                     var hasMorePages = false;
+                    bool needsRecovery = false;
 
                     // Build time-based query - this is critical for performance
                     var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
@@ -121,37 +190,26 @@ namespace ZViewer.Services
                             };
                             reader = new EventLogReader(eventQuery);
 
-                            // Test if reader works by trying to read one event
-                            var testEvent = reader.ReadEvent();
-                            testEvent?.Dispose();
-
-                            // If we got here, it works - recreate the reader
-                            reader.Dispose();
-                            reader = new EventLogReader(eventQuery);
-
                             _loggingService.LogInformation("Successfully created reader using LogName for {LogName}", logName);
                         }
-                        catch (InvalidOperationException ioe)
+                        catch (Exception ex) when (ex.Message.Contains("query is invalid") || ex is InvalidOperationException)
                         {
-                            _loggingService.LogWarning("InvalidOperation with time query, trying without time filter: {Error}", ioe.Message);
+                            _loggingService.LogWarning("Time-based query failed for {LogName}, using simple query: {Error}", logName, ex.Message);
 
-                            // Try without time filter
-                            try
+                            // Use simple query without time filter
+                            var simpleQuery = new EventLogQuery(logName, PathType.LogName)
                             {
-                                var simpleQuery = new EventLogQuery(logName, PathType.LogName)
-                                {
-                                    ReverseDirection = true
-                                };
-                                reader = new EventLogReader(simpleQuery);
-                                _loggingService.LogInformation("Successfully created reader without time filter for {LogName}", logName);
-
-                                // We'll filter by time in the reading loop
-                            }
-                            catch (Exception ex2)
-                            {
-                                _loggingService.LogWarning("Failed without time filter: {Error}", ex2.Message);
-                                throw;
-                            }
+                                ReverseDirection = true
+                            };
+                            reader = new EventLogReader(simpleQuery);
+                            useSimpleQuery = true;
+                            _loggingService.LogInformation("Successfully created reader without time filter for {LogName}", logName);
+                        }
+                        catch (EventLogException ele) when (ele.Message.Contains("specified channel could not be found"))
+                        {
+                            _loggingService.LogWarning("Channel not found for {LogName}: {Error}", logName, ele.Message);
+                            _validatedLogs[logName] = false; // Mark as invalid
+                            throw;
                         }
                         catch (Exception ex1)
                         {
@@ -190,11 +248,22 @@ namespace ZViewer.Services
                             int eventsRead = 0;
                             int eventsChecked = 0;
                             const int maxChecks = 1000; // Don't check too many events
+                            
 
-                            while (eventsRead < pageSize && eventsChecked < maxChecks)
+                            while (eventsRead < pageSize && eventsChecked < maxChecks && !needsRecovery)
                             {
-                                var evt = reader.ReadEvent();
-                                if (evt == null) break;
+                                EventRecord? evt = null;
+                                try
+                                {
+                                    evt = reader.ReadEvent();
+                                    if (evt == null) break;
+                                }
+                                catch (InvalidOperationException ex) when (ex.Message.Contains("Operation is not valid"))
+                                {
+                                    _loggingService.LogWarning("EventLogReader in invalid state for {LogName}, will attempt recovery", logName);
+                                    needsRecovery = true;
+                                    break;
+                                }
 
                                 eventsChecked++;
 
@@ -212,16 +281,60 @@ namespace ZViewer.Services
                                 }
                                 finally
                                 {
-                                    evt.Dispose();
+                                    evt?.Dispose();
                                 }
                             }
 
                             // Check for more
-                            var next = reader.ReadEvent();
-                            if (next != null)
+                            if (!needsRecovery)
                             {
-                                hasMorePages = true;
-                                next.Dispose();
+                                var next = reader.ReadEvent();
+                                if (next != null)
+                                {
+                                    hasMorePages = true;
+                                    next.Dispose();
+                                }
+                            }
+                        }
+
+                        // If we need recovery, try again with a simple query
+                        if (needsRecovery && pageNumber == 0)
+                        {
+                            _loggingService.LogInformation("Attempting simple query for {LogName} after initial failure", logName);
+
+                            try
+                            {
+                                using (var simpleReader = new EventLogReader(new EventLogQuery(logName, PathType.LogName) { ReverseDirection = true }))
+                                {
+                                    int eventsRead = 0;
+                                    while (eventsRead < pageSize)
+                                    {
+                                        var evt = simpleReader.ReadEvent();
+                                        if (evt == null) break;
+
+                                        try
+                                        {
+                                            if (evt.TimeCreated.HasValue && evt.TimeCreated.Value >= startTime)
+                                            {
+                                                events.Add(ConvertEventRecord(evt));
+                                                eventsRead++;
+                                            }
+                                            else if (evt.TimeCreated.HasValue && evt.TimeCreated.Value < startTime)
+                                            {
+                                                evt.Dispose();
+                                                break;
+                                            }
+                                        }
+                                        finally
+                                        {
+                                            evt.Dispose();
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _loggingService.LogWarning("Simple query also failed for {LogName}: {Error}", logName, ex.Message);
                             }
                         }
 
@@ -303,6 +416,12 @@ namespace ZViewer.Services
         // Enhanced version with quick estimation
         public async Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime)
         {
+            // Validate log first
+            if (!IsLogAccessible(logName))
+            {
+                return 0;
+            }
+
             // First check if we have a cached exact count
             var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
             if (_countCache.TryGetValue(cacheKey, out var cachedCount))
@@ -390,6 +509,12 @@ namespace ZViewer.Services
             IProgress<long>? progress,
             CancellationToken cancellationToken)
         {
+            // Validate log first
+            if (!IsLogAccessible(logName))
+            {
+                return 0;
+            }
+
             // Create a cache key based on log name and start time
             var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
 
@@ -515,6 +640,12 @@ namespace ZViewer.Services
             DateTime startTime,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            // Validate log first
+            if (!IsLogAccessible(logName))
+            {
+                yield break;
+            }
+
             var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
             var query = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
 
@@ -589,7 +720,11 @@ namespace ZViewer.Services
                         var logName = ParseLogName(fileName);
                         if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
                         {
-                            logs.Add(logName);
+                            // Validate before adding
+                            if (IsLogAccessible(logName))
+                            {
+                                logs.Add(logName);
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -731,6 +866,6 @@ namespace ZViewer.Services
     public interface IEventLogServiceExtended : IEventLogService
     {
         Task<long> GetTotalEventCountAsync(string logName, DateTime startTime, IProgress<long>? progress, CancellationToken cancellationToken);
-        new Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
+        // Removed the duplicate GetEstimatedEventCountAsync since it's already in IEventLogService
     }
 }

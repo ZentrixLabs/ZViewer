@@ -25,6 +25,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Page Remove="Themes\BaseStyles.xaml" />
+    <Page Remove="Themes\Dark.xaml" />
+    <Page Remove="Themes\DarkColors.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Remove="Themes\DarkColors.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Assets\ZentrixLabs_Logo.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -47,6 +57,31 @@
 
   <ItemGroup>
     <Folder Include="Converters\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Themes\DarkColors.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Update="Themes\BaseStyles.xaml">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <Generator>MSBuild:Compile</Generator>
+    </Resource>
+    <Resource Update="Themes\Dark.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Update="Themes\Light.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Update="Themes\LightColors.xaml">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <Generator>MSBuild:Compile</Generator>
+    </Resource>
   </ItemGroup>
 
 </Project>

@@ -19,7 +19,7 @@ namespace ZViewer.Services
         private readonly string _eventLogPath = @"C:\Windows\System32\winevt\Logs";
 
         // Constants for performance tuning
-        private const int CountBatchSize = 10000; // Count in batches for progress reporting
+        private const int CountBatchSize = 10000;
 
         // Cache for counting operations
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _countingOperations = new();
@@ -34,53 +34,7 @@ namespace ZViewer.Services
             _options = options;
         }
 
-        public bool needsRecovery = false;
-        public bool useSimpleQuery = false;
-
-        // New method to validate if a log is accessible
-        private bool IsLogAccessible(string logName)
-        {
-            // Check cache first
-            if (_validatedLogs.TryGetValue(logName, out var isValid))
-            {
-                return isValid;
-            }
-
-            try
-            {
-                using (var session = new EventLogSession())
-                {
-                    using (var config = new EventLogConfiguration(logName, session))
-                    {
-                        // Try to access basic properties to verify accessibility
-                        var isEnabled = config.IsEnabled;
-                        var logMode = config.LogMode;
-
-                        // If we can read these properties, the log is accessible
-                        _validatedLogs[logName] = true;
-                        return true;
-                    }
-                }
-            }
-            catch (EventLogNotFoundException)
-            {
-                _loggingService.LogInformation("Event log '{LogName}' not found", logName);
-                _validatedLogs[logName] = false;
-                return false;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                _loggingService.LogInformation("Access denied to event log '{LogName}'", logName);
-                _validatedLogs[logName] = false;
-                return false;
-            }
-            catch (Exception ex)
-            {
-                _loggingService.LogInformation("Cannot access log '{LogName}': {Error}", logName, ex.Message);
-                _validatedLogs[logName] = false;
-                return false;
-            }
-        }
+        #region Public Methods
 
         public async Task<IEnumerable<string>> GetAvailableLogsAsync()
         {
@@ -92,7 +46,6 @@ namespace ZViewer.Services
                 {
                     _loggingService.LogInformation("Getting available event logs using EventLogSession");
 
-                    // Get all event logs using the Windows API
                     using (var session = new EventLogSession())
                     {
                         var logNames = session.GetLogNames();
@@ -101,14 +54,12 @@ namespace ZViewer.Services
                         {
                             try
                             {
-                                // Skip problematic logs that often cause WMI errors
                                 if (logName.Contains("Analytic") || logName.Contains("Debug"))
                                 {
                                     _loggingService.LogInformation("Skipping analytic/debug log: {LogName}", logName);
                                     continue;
                                 }
 
-                                // Use our validation method
                                 if (IsLogAccessible(logName))
                                 {
                                     logs.Add(logName);
@@ -122,8 +73,6 @@ namespace ZViewer.Services
                     }
 
                     _loggingService.LogInformation("Found {Count} accessible event logs", logs.Count);
-
-                    // Ensure we always have the basic Windows logs
                     EnsureBasicWindowsLogs(logs);
 
                     return logs.Distinct().OrderBy(l => l).ToList();
@@ -136,14 +85,12 @@ namespace ZViewer.Services
             });
         }
 
-        // Simple paged loading without retry
         public async Task<PagedEventResult> LoadEventsPagedAsync(
             string logName,
             DateTime startTime,
             int pageSize,
             int pageNumber)
         {
-            // Validate log before attempting to read
             if (!IsLogAccessible(logName))
             {
                 _loggingService.LogWarning("Attempted to load events from inaccessible log: {LogName}", logName);
@@ -159,215 +106,93 @@ namespace ZViewer.Services
 
             return await Task.Run(() =>
             {
-                try
+                const int maxRetries = 3;
+                int currentRetry = 0;
+
+                while (currentRetry < maxRetries)
                 {
-                    _loggingService.LogInformation(
-                        "Loading page {Page} of {LogName} with size {PageSize}",
-                        pageNumber,
-                        logName,
-                        pageSize);
-
-                    var events = new List<EventLogEntry>();
-                    var hasMorePages = false;
-                    bool needsRecovery = false;
-
-                    // Build time-based query - this is critical for performance
-                    var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-                    var query = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
-
-                    _loggingService.LogInformation("Using query: {Query} for log: {LogName}", query, logName);
-
-                    EventLogReader? reader = null;
-
                     try
                     {
-                        // First try with log name
+                        _loggingService.LogInformation(
+                            "Loading page {Page} of {LogName} with size {PageSize} (Attempt {Attempt})",
+                            pageNumber, logName, pageSize, currentRetry + 1);
+
+                        var events = new List<EventLogEntry>();
+                        var hasMorePages = false;
+
+                        var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                        var query = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
+
+                        _loggingService.LogInformation("Using query: {Query} for log: {LogName}", query, logName);
+
+                        EventLogReader? reader = null;
+                        bool useTimeFilter = true;
+
                         try
                         {
-                            var eventQuery = new EventLogQuery(logName, PathType.LogName, query)
+                            reader = CreateEventLogReader(logName, query, startTime, ref useTimeFilter);
+
+                            if (reader == null)
                             {
-                                ReverseDirection = true
+                                throw new InvalidOperationException($"Failed to create reader for {logName}");
+                            }
+
+                            var readResult = ReadEventsWithErrorHandling(
+                                reader, logName, pageNumber, pageSize, startTime, useTimeFilter, events);
+
+                            hasMorePages = readResult.hasMore;
+
+                            _loggingService.LogInformation(
+                                "Successfully loaded {Count} events from {LogName}",
+                                events.Count, logName);
+
+                            return new PagedEventResult
+                            {
+                                Events = events,
+                                PageNumber = pageNumber,
+                                PageSize = pageSize,
+                                HasMorePages = hasMorePages,
+                                TotalEventsInPage = events.Count
                             };
-                            reader = new EventLogReader(eventQuery);
-
-                            _loggingService.LogInformation("Successfully created reader using LogName for {LogName}", logName);
                         }
-                        catch (Exception ex) when (ex.Message.Contains("query is invalid") || ex is InvalidOperationException)
+                        finally
                         {
-                            _loggingService.LogWarning("Time-based query failed for {LogName}, using simple query: {Error}", logName, ex.Message);
-
-                            // Use simple query without time filter
-                            var simpleQuery = new EventLogQuery(logName, PathType.LogName)
-                            {
-                                ReverseDirection = true
-                            };
-                            reader = new EventLogReader(simpleQuery);
-                            useSimpleQuery = true;
-                            _loggingService.LogInformation("Successfully created reader without time filter for {LogName}", logName);
+                            reader?.Dispose();
                         }
-                        catch (EventLogException ele) when (ele.Message.Contains("specified channel could not be found"))
-                        {
-                            _loggingService.LogWarning("Channel not found for {LogName}: {Error}", logName, ele.Message);
-                            _validatedLogs[logName] = false; // Mark as invalid
-                            throw;
-                        }
-                        catch (Exception ex1)
-                        {
-                            _loggingService.LogWarning("Failed with LogName, trying file path: {Error}", ex1.Message);
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("Operation is not valid") && currentRetry < maxRetries - 1)
+                    {
+                        currentRetry++;
+                        _loggingService.LogWarning(
+                            "Retry {Retry} for {LogName} due to: {Error}",
+                            currentRetry, logName, ex.Message);
 
-                            // Try with file path
-                            var logPath = Path.Combine(_eventLogPath, $"{logName}.evtx");
-                            if (File.Exists(logPath))
-                            {
-                                var eventQuery = new EventLogQuery(logPath, PathType.FilePath, query)
-                                {
-                                    ReverseDirection = true
-                                };
-                                reader = new EventLogReader(eventQuery);
-                                _loggingService.LogInformation("Successfully created reader using FilePath for {LogPath}", logPath);
-                            }
-                            else
-                            {
-                                _loggingService.LogError("Log file not found at {LogPath}", logPath);
-                                throw;
-                            }
-                        }
-
-                        using (reader)
-                        {
-                            // Skip to page
-                            var skipCount = pageNumber * pageSize;
-                            for (int i = 0; i < skipCount; i++)
-                            {
-                                var evt = reader.ReadEvent();
-                                if (evt == null) break;
-                                evt.Dispose();
-                            }
-
-                            // Read events
-                            int eventsRead = 0;
-                            int eventsChecked = 0;
-                            const int maxChecks = 1000; // Don't check too many events
-                            
-
-                            while (eventsRead < pageSize && eventsChecked < maxChecks && !needsRecovery)
-                            {
-                                EventRecord? evt = null;
-                                try
-                                {
-                                    evt = reader.ReadEvent();
-                                    if (evt == null) break;
-                                }
-                                catch (InvalidOperationException ex) when (ex.Message.Contains("Operation is not valid"))
-                                {
-                                    _loggingService.LogWarning("EventLogReader in invalid state for {LogName}, will attempt recovery", logName);
-                                    needsRecovery = true;
-                                    break;
-                                }
-
-                                eventsChecked++;
-
-                                try
-                                {
-                                    // If we're reading in reverse and hit an event before our time range, stop
-                                    if (evt.TimeCreated.HasValue && evt.TimeCreated.Value < startTime)
-                                    {
-                                        evt.Dispose();
-                                        break;
-                                    }
-
-                                    events.Add(ConvertEventRecord(evt));
-                                    eventsRead++;
-                                }
-                                finally
-                                {
-                                    evt?.Dispose();
-                                }
-                            }
-
-                            // Check for more
-                            if (!needsRecovery)
-                            {
-                                var next = reader.ReadEvent();
-                                if (next != null)
-                                {
-                                    hasMorePages = true;
-                                    next.Dispose();
-                                }
-                            }
-                        }
-
-                        // If we need recovery, try again with a simple query
-                        if (needsRecovery && pageNumber == 0)
-                        {
-                            _loggingService.LogInformation("Attempting simple query for {LogName} after initial failure", logName);
-
-                            try
-                            {
-                                using (var simpleReader = new EventLogReader(new EventLogQuery(logName, PathType.LogName) { ReverseDirection = true }))
-                                {
-                                    int eventsRead = 0;
-                                    while (eventsRead < pageSize)
-                                    {
-                                        var evt = simpleReader.ReadEvent();
-                                        if (evt == null) break;
-
-                                        try
-                                        {
-                                            if (evt.TimeCreated.HasValue && evt.TimeCreated.Value >= startTime)
-                                            {
-                                                events.Add(ConvertEventRecord(evt));
-                                                eventsRead++;
-                                            }
-                                            else if (evt.TimeCreated.HasValue && evt.TimeCreated.Value < startTime)
-                                            {
-                                                evt.Dispose();
-                                                break;
-                                            }
-                                        }
-                                        finally
-                                        {
-                                            evt.Dispose();
-                                        }
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _loggingService.LogWarning("Simple query also failed for {LogName}: {Error}", logName, ex.Message);
-                            }
-                        }
-
-                        _loggingService.LogInformation("Successfully loaded {Count} events from {LogName}", events.Count, logName);
+                        Thread.Sleep(100 * currentRetry);
                     }
                     catch (Exception ex)
                     {
-                        _loggingService.LogError(ex, "All attempts to read log '{LogName}' failed", logName);
+                        _loggingService.LogError(ex, "Failed to read log '{LogName}' on attempt {Attempt}", logName, currentRetry + 1);
+
+                        return new PagedEventResult
+                        {
+                            Events = new List<EventLogEntry>(),
+                            PageNumber = pageNumber,
+                            PageSize = pageSize,
+                            HasMorePages = false,
+                            TotalEventsInPage = 0
+                        };
                     }
-
-                    return new PagedEventResult
-                    {
-                        Events = events,
-                        PageNumber = pageNumber,
-                        PageSize = pageSize,
-                        HasMorePages = hasMorePages,
-                        TotalEventsInPage = events.Count
-                    };
                 }
-                catch (Exception ex)
+
+                _loggingService.LogError("All attempts to read log '{LogName}' failed", logName);
+                return new PagedEventResult
                 {
-                    _loggingService.LogError(ex, "Failed to load events from log '{LogName}'", logName);
-
-                    // Return empty result instead of throwing
-                    return new PagedEventResult
-                    {
-                        Events = new List<EventLogEntry>(),
-                        PageNumber = pageNumber,
-                        PageSize = pageSize,
-                        HasMorePages = false,
-                        TotalEventsInPage = 0
-                    };
-                }
+                    Events = new List<EventLogEntry>(),
+                    PageNumber = pageNumber,
+                    PageSize = pageSize,
+                    HasMorePages = false,
+                    TotalEventsInPage = 0
+                };
             });
         }
 
@@ -413,23 +238,19 @@ namespace ZViewer.Services
             return allEvents.OrderByDescending(e => e.TimeCreated);
         }
 
-        // Enhanced version with quick estimation
         public async Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime)
         {
-            // Validate log first
             if (!IsLogAccessible(logName))
             {
                 return 0;
             }
 
-            // First check if we have a cached exact count
             var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
             if (_countCache.TryGetValue(cacheKey, out var cachedCount))
             {
                 return cachedCount;
             }
 
-            // Otherwise, do a quick sample estimate
             return await Task.Run(() =>
             {
                 try
@@ -439,7 +260,6 @@ namespace ZViewer.Services
 
                     using var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
 
-                    // Count first 1000 events to get an estimate
                     const int sampleSize = 1000;
                     long sampleCount = 0;
                     DateTime? firstEventTime = null;
@@ -461,9 +281,8 @@ namespace ZViewer.Services
                     }
 
                     if (sampleCount == 0) return 0;
-                    if (sampleCount < sampleSize) return sampleCount; // Less than sample size
+                    if (sampleCount < sampleSize) return sampleCount;
 
-                    // Extrapolate based on time range
                     if (firstEventTime.HasValue && lastEventTime.HasValue && firstEventTime != lastEventTime)
                     {
                         var sampleTimeSpan = firstEventTime.Value - lastEventTime.Value;
@@ -471,19 +290,15 @@ namespace ZViewer.Services
 
                         if (sampleTimeSpan.TotalSeconds > 0)
                         {
-                            var estimatedTotal = (long)(sampleCount *
-                                (totalTimeSpan.TotalSeconds / sampleTimeSpan.TotalSeconds));
-
+                            var estimatedTotal = (long)(sampleCount * (totalTimeSpan.TotalSeconds / sampleTimeSpan.TotalSeconds));
                             _loggingService.LogInformation(
                                 "Estimated {Count:N0} events in {LogName} based on sample",
                                 estimatedTotal, logName);
-
                             return estimatedTotal;
                         }
                     }
 
-                    // Fallback: just indicate there are many events
-                    return sampleCount * 10; // Rough estimate
+                    return sampleCount * 10;
                 }
                 catch (Exception ex)
                 {
@@ -495,30 +310,24 @@ namespace ZViewer.Services
             });
         }
 
-        // Original method kept for backward compatibility
         public async Task<long> GetTotalEventCountAsync(string logName, DateTime startTime)
         {
-            // Call the enhanced version with no progress/cancellation
             return await GetTotalEventCountAsync(logName, startTime, null, CancellationToken.None);
         }
 
-        // Enhanced version with progress and cancellation
         public async Task<long> GetTotalEventCountAsync(
             string logName,
             DateTime startTime,
             IProgress<long>? progress,
             CancellationToken cancellationToken)
         {
-            // Validate log first
             if (!IsLogAccessible(logName))
             {
                 return 0;
             }
 
-            // Create a cache key based on log name and start time
             var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
 
-            // Check cache first
             if (_countCache.TryGetValue(cacheKey, out var cachedCount))
             {
                 _loggingService.LogInformation(
@@ -527,14 +336,12 @@ namespace ZViewer.Services
                 return cachedCount;
             }
 
-            // Cancel any existing counting operation for this log
             if (_countingOperations.TryRemove(logName, out var existingCts))
             {
                 existingCts.Cancel();
                 existingCts.Dispose();
             }
 
-            // Create new cancellation token source
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _countingOperations[logName] = cts;
 
@@ -565,12 +372,10 @@ namespace ZViewer.Services
                             evt.Dispose();
                             count++;
 
-                            // Report progress every batch
                             if (count % CountBatchSize == 0)
                             {
                                 progress?.Report(count);
 
-                                // Log progress every 5 seconds
                                 if ((DateTime.UtcNow - lastProgressReport).TotalSeconds >= 5)
                                 {
                                     _loggingService.LogInformation(
@@ -579,7 +384,6 @@ namespace ZViewer.Services
                                     lastProgressReport = DateTime.UtcNow;
                                 }
 
-                                // Allow other operations to proceed
                                 await Task.Yield();
                             }
                         }
@@ -592,10 +396,8 @@ namespace ZViewer.Services
                             return -1;
                         }
 
-                        // Cache the result
                         _countCache[cacheKey] = count;
 
-                        // Clean up old cache entries (keep last 100)
                         if (_countCache.Count > 100)
                         {
                             var oldestKey = _countCache.Keys.First();
@@ -634,13 +436,11 @@ namespace ZViewer.Services
             }
         }
 
-        // Streaming support
         public async IAsyncEnumerable<EventLogEntry> StreamEventsAsync(
             string logName,
             DateTime startTime,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            // Validate log first
             if (!IsLogAccessible(logName))
             {
                 yield break;
@@ -675,7 +475,6 @@ namespace ZViewer.Services
             }
         }
 
-        // Cancel all counting operations
         public void CancelAllCountingOperations()
         {
             foreach (var kvp in _countingOperations)
@@ -686,13 +485,270 @@ namespace ZViewer.Services
             _countingOperations.Clear();
         }
 
-        // IDisposable implementation
         public void Dispose()
         {
             CancelAllCountingOperations();
         }
 
-        #region Private Helper Methods
+        public void ClearValidationCache()
+        {
+            _validatedLogs.Clear();
+            _loggingService.LogInformation("Cleared log validation cache");
+        }
+
+        public IEnumerable<string> GetFailedLogs()
+        {
+            return _validatedLogs
+                .Where(kvp => !kvp.Value)
+                .Select(kvp => kvp.Key)
+                .OrderBy(name => name);
+        }
+
+        public async Task<(bool success, string message)> TestLogAccessAsync(string logName)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    using (var session = new EventLogSession())
+                    using (var config = new EventLogConfiguration(logName, session))
+                    {
+                        var isEnabled = config.IsEnabled;
+                        var logMode = config.LogMode;
+                        var maxSize = config.MaximumSizeInBytes;
+
+                        _loggingService.LogInformation("Log {LogName} - Enabled: {Enabled}, Mode: {Mode}, MaxSize: {Size}",
+                            logName, isEnabled, logMode, maxSize);
+                    }
+
+                    var query = new EventLogQuery(logName, PathType.LogName)
+                    {
+                        ReverseDirection = true
+                    };
+
+                    using (var reader = new EventLogReader(query))
+                    {
+                        var evt = reader.ReadEvent();
+                        if (evt != null)
+                        {
+                            evt.Dispose();
+                            return (true, $"Successfully accessed {logName} - can read events");
+                        }
+                        else
+                        {
+                            return (true, $"Successfully accessed {logName} - log is empty");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"Failed to access {logName}: {ex.GetType().Name} - {ex.Message}");
+                }
+            });
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        private bool IsLogAccessible(string logName)
+        {
+            if (_validatedLogs.TryGetValue(logName, out var isValid))
+            {
+                return isValid;
+            }
+
+            try
+            {
+                using (var session = new EventLogSession())
+                {
+                    using (var config = new EventLogConfiguration(logName, session))
+                    {
+                        var isEnabled = config.IsEnabled;
+                        var logMode = config.LogMode;
+
+                        _validatedLogs[logName] = true;
+                        return true;
+                    }
+                }
+            }
+            catch (EventLogNotFoundException)
+            {
+                _loggingService.LogInformation("Event log '{LogName}' not found", logName);
+                _validatedLogs[logName] = false;
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                _loggingService.LogInformation("Access denied to event log '{LogName}'", logName);
+                _validatedLogs[logName] = false;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogInformation("Cannot access log '{LogName}': {Error}", logName, ex.Message);
+                _validatedLogs[logName] = false;
+                return false;
+            }
+        }
+
+        private EventLogReader? CreateEventLogReader(string logName, string query, DateTime startTime, ref bool useTimeFilter)
+        {
+            EventLogReader? reader = null;
+
+            try
+            {
+                var eventQuery = new EventLogQuery(logName, PathType.LogName, query)
+                {
+                    ReverseDirection = true
+                };
+                reader = new EventLogReader(eventQuery);
+                _loggingService.LogInformation("Created reader with time filter for {LogName}", logName);
+            }
+            catch (Exception ex) when (ex.Message.Contains("query is invalid") || ex is EventLogInvalidDataException)
+            {
+                _loggingService.LogWarning("Time-based query failed for {LogName}: {Error}", logName, ex.Message);
+
+                try
+                {
+                    var simpleQuery = new EventLogQuery(logName, PathType.LogName)
+                    {
+                        ReverseDirection = true
+                    };
+                    reader = new EventLogReader(simpleQuery);
+                    useTimeFilter = false;
+                    _loggingService.LogInformation("Created reader without time filter for {LogName}", logName);
+                }
+                catch (Exception fallbackEx)
+                {
+                    _loggingService.LogError(fallbackEx, "Failed to create reader even with simple query for {LogName}", logName);
+                    throw;
+                }
+            }
+            catch (EventLogException ele) when (ele.Message.Contains("specified channel could not be found"))
+            {
+                _loggingService.LogWarning("Channel not found for {LogName}: {Error}", logName, ele.Message);
+                _validatedLogs[logName] = false;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogWarning("Failed to create reader for {LogName}: {Error}", logName, ex.Message);
+
+                var logPath = Path.Combine(_eventLogPath, $"{logName}.evtx");
+                if (File.Exists(logPath))
+                {
+                    try
+                    {
+                        var eventQuery = new EventLogQuery(logPath, PathType.FilePath, query)
+                        {
+                            ReverseDirection = true
+                        };
+                        reader = new EventLogReader(eventQuery);
+                        _loggingService.LogInformation("Created reader using file path for {LogName}", logName);
+                    }
+                    catch (Exception fileEx)
+                    {
+                        _loggingService.LogError(fileEx, "Failed to create reader from file path for {LogName}", logName);
+                        throw;
+                    }
+                }
+                else
+                {
+                    throw;
+                }
+            }
+
+            return reader;
+        }
+
+        private (bool hasMore, int eventsRead) ReadEventsWithErrorHandling(
+            EventLogReader reader,
+            string logName,
+            int pageNumber,
+            int pageSize,
+            DateTime startTime,
+            bool useTimeFilter,
+            List<EventLogEntry> events)
+        {
+            var skipCount = pageNumber * pageSize;
+            for (int i = 0; i < skipCount; i++)
+            {
+                EventRecord? evt = null;
+                try
+                {
+                    evt = reader.ReadEvent();
+                    if (evt == null) break;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _loggingService.LogWarning("Error skipping events in {LogName}: {Error}", logName, ex.Message);
+                    break;
+                }
+                finally
+                {
+                    evt?.Dispose();
+                }
+            }
+
+            int eventsRead = 0;
+            int eventsChecked = 0;
+            const int maxChecks = 1000;
+            bool hasMore = false;
+
+            while (eventsRead < pageSize && eventsChecked < maxChecks)
+            {
+                EventRecord? evt = null;
+                try
+                {
+                    evt = reader.ReadEvent();
+                    if (evt == null) break;
+
+                    eventsChecked++;
+
+                    if (!useTimeFilter && evt.TimeCreated.HasValue && evt.TimeCreated.Value < startTime)
+                    {
+                        continue;
+                    }
+
+                    events.Add(ConvertEventRecord(evt));
+                    eventsRead++;
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("Operation is not valid"))
+                {
+                    _loggingService.LogWarning("Reader became invalid while reading {LogName} at event {Count}", logName, eventsRead);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogWarning("Error reading event from {LogName}: {Error}", logName, ex.Message);
+                }
+                finally
+                {
+                    evt?.Dispose();
+                }
+            }
+
+            if (eventsChecked < maxChecks)
+            {
+                EventRecord? nextEvt = null;
+                try
+                {
+                    nextEvt = reader.ReadEvent();
+                    hasMore = (nextEvt != null);
+                }
+                catch
+                {
+                    hasMore = false;
+                }
+                finally
+                {
+                    nextEvt?.Dispose();
+                }
+            }
+
+            return (hasMore, eventsRead);
+        }
 
         private List<string> GetAvailableLogsFromFileSystem()
         {
@@ -720,7 +776,6 @@ namespace ZViewer.Services
                         var logName = ParseLogName(fileName);
                         if (!string.IsNullOrEmpty(logName) && ShouldIncludeLog(fileName, fileInfo))
                         {
-                            // Validate before adding
                             if (IsLogAccessible(logName))
                             {
                                 logs.Add(logName);
@@ -862,10 +917,15 @@ namespace ZViewer.Services
 
     #endregion
 
-    // Extended interface for additional functionality
+    #region Interfaces
+
     public interface IEventLogServiceExtended : IEventLogService
     {
         Task<long> GetTotalEventCountAsync(string logName, DateTime startTime, IProgress<long>? progress, CancellationToken cancellationToken);
-        // Removed the duplicate GetEstimatedEventCountAsync since it's already in IEventLogService
+        void ClearValidationCache();
+        IEnumerable<string> GetFailedLogs();
+        Task<(bool success, string message)> TestLogAccessAsync(string logName);
     }
+
+    #endregion
 }

@@ -14,5 +14,7 @@ namespace ZViewer.Services
         Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
         Task<long> GetTotalEventCountAsync(string logName, DateTime startTime);
         Task<PagedEventResult> LoadEventsPagedAsync(string logName, DateTime startTime, int pageSize, int pageNumber);
+        IAsyncEnumerable<EventLogEntry> StreamEventsAsync(string logName, DateTime startTime, CancellationToken cancellationToken = default);
+
     }
 }

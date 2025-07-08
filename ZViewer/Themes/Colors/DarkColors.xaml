@@ -1,6 +1,6 @@
 ﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    
+
     <!-- Dark Theme Colors -->
     <Color x:Key="BackgroundColor">#121212</Color>
     <Color x:Key="SurfaceColor">#1E1E1E</Color>
@@ -41,11 +41,16 @@
     <SolidColorBrush x:Key="InfoBrush" Color="#42A5F5"/>
     <SolidColorBrush x:Key="VerboseBrush" Color="#9E9E9E"/>
 
+    <!-- Semi-transparent Event Level Backgrounds (for dark theme) -->
+    <SolidColorBrush x:Key="ErrorBackgroundBrush" Color="#3D1F1F"/>
+    <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#3D2F1F"/>
+    <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#1F2F3D"/>
+
     <!-- Additional Dark Theme Specific Colors -->
     <SolidColorBrush x:Key="AccentBrush" Color="#BB86FC"/>
     <SolidColorBrush x:Key="SuccessBrush" Color="#66BB6A"/>
     <SolidColorBrush x:Key="DisabledBrush" Color="#616161"/>
-    
+
     <!-- Code/Log Viewer Specific -->
     <SolidColorBrush x:Key="CodeBackgroundBrush" Color="#0D0D0D"/>
     <SolidColorBrush x:Key="LineNumberBrush" Color="#858585"/>

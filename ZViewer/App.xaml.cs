@@ -18,6 +18,7 @@ namespace ZViewer
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            // Set up the host first
             _host = Host.CreateDefaultBuilder()
                 .ConfigureAppConfiguration((context, config) =>
                 {
@@ -64,13 +65,18 @@ namespace ZViewer
                 })
                 .Build();
 
-            // Initialize theme service with configuration
+            // Start the host
+            _host.Start();
+
+            // Initialize theme BEFORE calling base.OnStartup and creating windows
             InitializeTheme();
 
+            // Now call base OnStartup which initializes WPF
+            base.OnStartup(e);
+
+            // Create and show the main window AFTER theme is loaded
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             mainWindow.Show();
-
-            base.OnStartup(e);
         }
 
         private void InitializeTheme()

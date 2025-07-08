@@ -19,6 +19,11 @@
   <ItemGroup>
     <None Remove="Assets\ZentrixLabs_Logo.png" />
 	<None Remove="Assets\ZViewer.ico" />
+	  <Resource Include="Themes\BaseStyles.xaml" />
+	  <Resource Include="Themes\Light.xaml" />
+	  <Resource Include="Themes\Dark.xaml" />
+	  <Resource Include="Themes\Colors\LightColors.xaml" />
+	  <Resource Include="Themes\Colors\DarkColors.xaml" />
 	  <Resource Include="Themes\**\*.xaml">
 		  <SubType>Designer</SubType>
 	  </Resource>
@@ -60,7 +65,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="Themes\DarkColors.xaml">
+    <None Include="Themes\Colors\DarkColors.xaml">
       <Generator>MSBuild:Compile</Generator>
     </None>
   </ItemGroup>
@@ -78,7 +83,7 @@
       <Generator>MSBuild:Compile</Generator>
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </Resource>
-    <Resource Update="Themes\LightColors.xaml">
+    <Resource Update="Themes\Colors\LightColors.xaml">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
       <Generator>MSBuild:Compile</Generator>
     </Resource>

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
 using System.IO;
@@ -11,11 +12,18 @@ using ZViewer.Models;
 
 namespace ZViewer.Services
 {
-    public class EventLogService : IEventLogService
+    public class EventLogService : IEventLogService, IEventLogServiceExtended, IDisposable
     {
         private readonly ILoggingService _loggingService;
         private readonly IOptions<ZViewerOptions> _options;
         private readonly string _eventLogPath = @"C:\Windows\System32\winevt\Logs";
+
+        // Constants for performance tuning
+        private const int CountBatchSize = 10000; // Count in batches for progress reporting
+
+        // Cache for counting operations
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _countingOperations = new();
+        private readonly ConcurrentDictionary<string, long> _countCache = new();
 
         public EventLogService(ILoggingService loggingService, IOptions<ZViewerOptions> options)
         {
@@ -292,56 +300,213 @@ namespace ZViewer.Services
             return allEvents.OrderByDescending(e => e.TimeCreated);
         }
 
+        // Enhanced version with quick estimation
         public async Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime)
         {
-            return await GetTotalEventCountAsync(logName, startTime);
-        }
+            // First check if we have a cached exact count
+            var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
+            if (_countCache.TryGetValue(cacheKey, out var cachedCount))
+            {
+                return cachedCount;
+            }
 
-        public async Task<long> GetTotalEventCountAsync(string logName, DateTime startTime)
-        {
+            // Otherwise, do a quick sample estimate
             return await Task.Run(() =>
             {
                 try
                 {
-                    // Don't count if it will take too long
-                    var timeRange = DateTime.Now - startTime;
-                    if (timeRange.TotalDays > 7)
-                    {
-                        _loggingService.LogInformation("Skipping count for {LogName} - time range too large ({Days} days)", logName, timeRange.TotalDays);
-                        return -1;
-                    }
-
                     var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
                     var query = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
 
                     using var reader = new EventLogReader(new EventLogQuery(logName, PathType.LogName, query));
 
-                    long count = 0;
-                    const int maxCount = 10000; // Stop counting after 10k to avoid performance issues
+                    // Count first 1000 events to get an estimate
+                    const int sampleSize = 1000;
+                    long sampleCount = 0;
+                    DateTime? firstEventTime = null;
+                    DateTime? lastEventTime = null;
 
-                    while (reader.ReadEvent() != null)
+                    while (sampleCount < sampleSize)
                     {
-                        count++;
-                        if (count >= maxCount)
+                        var evt = reader.ReadEvent();
+                        if (evt == null) break;
+
+                        if (firstEventTime == null && evt.TimeCreated.HasValue)
+                            firstEventTime = evt.TimeCreated.Value;
+
+                        if (evt.TimeCreated.HasValue)
+                            lastEventTime = evt.TimeCreated.Value;
+
+                        evt.Dispose();
+                        sampleCount++;
+                    }
+
+                    if (sampleCount == 0) return 0;
+                    if (sampleCount < sampleSize) return sampleCount; // Less than sample size
+
+                    // Extrapolate based on time range
+                    if (firstEventTime.HasValue && lastEventTime.HasValue && firstEventTime != lastEventTime)
+                    {
+                        var sampleTimeSpan = firstEventTime.Value - lastEventTime.Value;
+                        var totalTimeSpan = DateTime.Now - startTime;
+
+                        if (sampleTimeSpan.TotalSeconds > 0)
                         {
-                            _loggingService.LogInformation("Stopped counting at {MaxCount} events for performance", maxCount);
-                            return maxCount; // Return max count with a + indicator
+                            var estimatedTotal = (long)(sampleCount *
+                                (totalTimeSpan.TotalSeconds / sampleTimeSpan.TotalSeconds));
+
+                            _loggingService.LogInformation(
+                                "Estimated {Count:N0} events in {LogName} based on sample",
+                                estimatedTotal, logName);
+
+                            return estimatedTotal;
                         }
                     }
 
-                    return count;
-                }
-                catch (EventLogNotFoundException ex)
-                {
-                    _loggingService.LogWarning("Log not found when counting {LogName}: {Error}", logName, ex.Message);
-                    return -1;
+                    // Fallback: just indicate there are many events
+                    return sampleCount * 10; // Rough estimate
                 }
                 catch (Exception ex)
                 {
-                    _loggingService.LogWarning("Failed to count events in {LogName}: {Error}", logName, ex.Message);
+                    _loggingService.LogWarning(
+                        "Failed to estimate event count for {LogName}: {Error}",
+                        logName, ex.Message);
                     return -1;
                 }
             });
+        }
+
+        // Original method kept for backward compatibility
+        public async Task<long> GetTotalEventCountAsync(string logName, DateTime startTime)
+        {
+            // Call the enhanced version with no progress/cancellation
+            return await GetTotalEventCountAsync(logName, startTime, null, CancellationToken.None);
+        }
+
+        // Enhanced version with progress and cancellation
+        public async Task<long> GetTotalEventCountAsync(
+            string logName,
+            DateTime startTime,
+            IProgress<long>? progress,
+            CancellationToken cancellationToken)
+        {
+            // Create a cache key based on log name and start time
+            var cacheKey = $"{logName}_{startTime:yyyyMMddHHmmss}";
+
+            // Check cache first
+            if (_countCache.TryGetValue(cacheKey, out var cachedCount))
+            {
+                _loggingService.LogInformation(
+                    "Returning cached count {Count} for {LogName}",
+                    cachedCount, logName);
+                return cachedCount;
+            }
+
+            // Cancel any existing counting operation for this log
+            if (_countingOperations.TryRemove(logName, out var existingCts))
+            {
+                existingCts.Cancel();
+                existingCts.Dispose();
+            }
+
+            // Create new cancellation token source
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _countingOperations[logName] = cts;
+
+            try
+            {
+                return await Task.Run(async () =>
+                {
+                    try
+                    {
+                        var timeStr = startTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                        var query = $"*[System[TimeCreated[@SystemTime>='{timeStr}']]]";
+
+                        _loggingService.LogInformation(
+                            "Starting background count for {LogName} from {StartTime}",
+                            logName, startTime);
+
+                        using var reader = new EventLogReader(
+                            new EventLogQuery(logName, PathType.LogName, query));
+
+                        long count = 0;
+                        var lastProgressReport = DateTime.UtcNow;
+
+                        while (!cts.Token.IsCancellationRequested)
+                        {
+                            var evt = reader.ReadEvent();
+                            if (evt == null) break;
+
+                            evt.Dispose();
+                            count++;
+
+                            // Report progress every batch
+                            if (count % CountBatchSize == 0)
+                            {
+                                progress?.Report(count);
+
+                                // Log progress every 5 seconds
+                                if ((DateTime.UtcNow - lastProgressReport).TotalSeconds >= 5)
+                                {
+                                    _loggingService.LogInformation(
+                                        "Count progress for {LogName}: {Count:N0} events",
+                                        logName, count);
+                                    lastProgressReport = DateTime.UtcNow;
+                                }
+
+                                // Allow other operations to proceed
+                                await Task.Yield();
+                            }
+                        }
+
+                        if (cts.Token.IsCancellationRequested)
+                        {
+                            _loggingService.LogInformation(
+                                "Count operation cancelled for {LogName} at {Count:N0} events",
+                                logName, count);
+                            return -1;
+                        }
+
+                        // Cache the result
+                        _countCache[cacheKey] = count;
+
+                        // Clean up old cache entries (keep last 100)
+                        if (_countCache.Count > 100)
+                        {
+                            var oldestKey = _countCache.Keys.First();
+                            _countCache.TryRemove(oldestKey, out _);
+                        }
+
+                        _loggingService.LogInformation(
+                            "Completed counting {LogName}: {Count:N0} total events",
+                            logName, count);
+
+                        return count;
+                    }
+                    catch (EventLogNotFoundException ex)
+                    {
+                        _loggingService.LogWarning(
+                            "Log not found when counting {LogName}: {Error}",
+                            logName, ex.Message);
+                        return -1;
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggingService.LogWarning(
+                            "Failed to count events in {LogName}: {Error}",
+                            logName, ex.Message);
+                        return -1;
+                    }
+                }, cts.Token);
+            }
+            finally
+            {
+                _countingOperations.TryRemove(logName, out _);
+                if (!cts.Token.IsCancellationRequested)
+                {
+                    cts.Dispose();
+                }
+            }
         }
 
         // Streaming support
@@ -377,6 +542,23 @@ namespace ZViewer.Services
             {
                 reader?.Dispose();
             }
+        }
+
+        // Cancel all counting operations
+        public void CancelAllCountingOperations()
+        {
+            foreach (var kvp in _countingOperations)
+            {
+                kvp.Value.Cancel();
+                kvp.Value.Dispose();
+            }
+            _countingOperations.Clear();
+        }
+
+        // IDisposable implementation
+        public void Dispose()
+        {
+            CancelAllCountingOperations();
         }
 
         #region Private Helper Methods
@@ -544,4 +726,11 @@ namespace ZViewer.Services
     }
 
     #endregion
+
+    // Extended interface for additional functionality
+    public interface IEventLogServiceExtended : IEventLogService
+    {
+        Task<long> GetTotalEventCountAsync(string logName, DateTime startTime, IProgress<long>? progress, CancellationToken cancellationToken);
+        new Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
+    }
 }

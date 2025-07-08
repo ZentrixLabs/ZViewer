@@ -65,6 +65,10 @@ namespace ZViewer.ViewModels
         private string _pageInfo = "";
         private long _totalEventCount = -1;
         private bool _isCountingEvents;
+
+        // Background counting
+        private CancellationTokenSource? _countingCts;
+        private IProgress<long>? _countingProgress;
         #endregion
 
         #region Properties
@@ -172,7 +176,44 @@ namespace ZViewer.ViewModels
 
         // Paging Properties
         public bool HasMorePages => _hasMorePages;
-        public bool IsCountingEvents => _isCountingEvents;
+        public bool IsCountingEvents
+        {
+            get => _isCountingEvents;
+            set
+            {
+                if (SetProperty(ref _isCountingEvents, value))
+                {
+                    OnPropertyChanged(nameof(TotalEventCountDisplay));
+                    OnPropertyChanged(nameof(PageInfo));
+                }
+            }
+        }
+
+        public long TotalEventCount
+        {
+            get => _totalEventCount;
+            set
+            {
+                if (SetProperty(ref _totalEventCount, value))
+                {
+                    OnPropertyChanged(nameof(TotalEventCountDisplay));
+                    OnPropertyChanged(nameof(PageInfo));
+                }
+            }
+        }
+
+        public string TotalEventCountDisplay
+        {
+            get
+            {
+                if (_totalEventCount < 0)
+                {
+                    return IsCountingEvents ? "Counting..." : "Unknown";
+                }
+                return _totalEventCount.ToString("N0");
+            }
+        }
+
         public string PageInfo
         {
             get => _pageInfo;
@@ -389,7 +430,7 @@ namespace ZViewer.ViewModels
                 // Start counting total events in background if we haven't already
                 if (_totalEventCount < 0 && !IsCountingEvents)
                 {
-                    _ = CountTotalEventsAsync();
+                    _ = CountTotalEventsAsync(); // Fire and forget
                 }
 
                 UpdatePageInfo();
@@ -426,38 +467,87 @@ namespace ZViewer.ViewModels
 
         private async Task CountTotalEventsAsync()
         {
-            if (string.IsNullOrEmpty(_currentLogFilter)) return;
+            if (string.IsNullOrEmpty(_currentLogFilter) || IsCountingEvents)
+                return;
+
+            // Cancel any existing counting operation
+            _countingCts?.Cancel();
+            _countingCts?.Dispose();
+            _countingCts = new CancellationTokenSource();
 
             try
             {
-                _isCountingEvents = true;
-                OnPropertyChanged(nameof(IsCountingEvents));
+                IsCountingEvents = true;
 
-                _totalEventCount = await _eventLogService.GetTotalEventCountAsync(_currentLogFilter, _currentStartTime);
-
-                if (_totalEventCount >= 0)
+                // Create progress reporter
+                _countingProgress = new Progress<long>(count =>
                 {
-                    UpdatePageInfo();
-
-                    if (_totalEventCount > 1000000)
+                    // Update UI with progress
+                    Application.Current.Dispatcher.Invoke(() =>
                     {
-                        StatusText = $"Found {_totalEventCount / 1000000.0:F1}M total events in {_currentLogFilter} log";
+                        StatusText = $"Counted {count:N0} events so far...";
+                    });
+                });
+
+                // First try to get a quick estimate if the service supports it
+                if (_eventLogService is IEventLogServiceExtended extendedService)
+                {
+                    var estimate = await extendedService.GetEstimatedEventCountAsync(
+                        _currentLogFilter, _currentStartTime);
+
+                    if (estimate > 0)
+                    {
+                        TotalEventCount = estimate;
+                        StatusText = $"Estimated ~{estimate:N0} events (counting exact total...)";
+                    }
+                }
+
+                // Then get the exact count
+                long exactCount = -1;
+
+                // Check if the service supports progress and cancellation
+                if (_eventLogService is IEventLogServiceExtended extendedSvc)
+                {
+                    exactCount = await extendedSvc.GetTotalEventCountAsync(
+                        _currentLogFilter,
+                        _currentStartTime,
+                        _countingProgress,
+                        _countingCts.Token);
+                }
+                else
+                {
+                    // Fallback to basic counting
+                    exactCount = await _eventLogService.GetTotalEventCountAsync(
+                        _currentLogFilter, _currentStartTime);
+                }
+
+                if (exactCount >= 0 && !_countingCts.Token.IsCancellationRequested)
+                {
+                    TotalEventCount = exactCount;
+
+                    if (exactCount > 1000000)
+                    {
+                        StatusText = $"Found {exactCount / 1000000.0:F1}M total events in {_currentLogFilter} log";
                     }
                     else
                     {
-                        StatusText = $"Found {_totalEventCount:N0} total events in {_currentLogFilter} log";
+                        StatusText = $"Found {exactCount:N0} total events in {_currentLogFilter} log";
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                _loggingService.LogInformation("Event counting was cancelled");
             }
             catch (Exception ex)
             {
                 _loggingService.LogWarning("Failed to count total events: {Error}", ex.Message);
-                _totalEventCount = -1;
+                TotalEventCount = -1;
             }
             finally
             {
-                _isCountingEvents = false;
-                OnPropertyChanged(nameof(IsCountingEvents));
+                IsCountingEvents = false;
+                _countingProgress = null;
             }
         }
         #endregion
@@ -556,6 +646,12 @@ namespace ZViewer.ViewModels
                                 EventEntries.RemoveAt(EventEntries.Count - 1);
                             }
 
+                            // Update total count if we have one
+                            if (TotalEventCount > 0)
+                            {
+                                TotalEventCount++;
+                            }
+
                             StatusText = $"New event: {newEvent.Source} - Event ID {newEvent.EventId}";
                         },
                         error =>
@@ -639,7 +735,16 @@ namespace ZViewer.ViewModels
             _currentPage = 0;
             _totalEventCount = -1;
             _hasMorePages = false;
+
+            // Cancel any ongoing counting
+            _countingCts?.Cancel();
+            _countingCts?.Dispose();
+            _countingCts = null;
+            IsCountingEvents = false;
+
             OnPropertyChanged(nameof(HasMorePages));
+            OnPropertyChanged(nameof(TotalEventCount));
+            OnPropertyChanged(nameof(TotalEventCountDisplay));
         }
 
         private void UpdatePageInfo()
@@ -652,30 +757,23 @@ namespace ZViewer.ViewModels
 
             var startEvent = (_currentPage * _pageSize) + 1;
             var endEvent = startEvent + EventEntries.Count - 1;
-            var moreIndicator = HasMorePages ? "+" : "";
 
-            string totalInfo = "";
-            if (_totalEventCount >= 0)
+            if (_totalEventCount > 0)
             {
-                if (_totalEventCount > 999999)
-                {
-                    totalInfo = $" of {_totalEventCount / 1000000.0:F1}M";
-                }
-                else if (_totalEventCount > 999)
-                {
-                    totalInfo = $" of {_totalEventCount / 1000.0:F0}K";
-                }
-                else
-                {
-                    totalInfo = $" of {_totalEventCount:N0}";
-                }
+                // We have an exact count
+                PageInfo = $"Page {_currentPage + 1} | Events {startEvent:N0}-{endEvent:N0} of {_totalEventCount:N0}";
             }
             else if (IsCountingEvents)
             {
-                totalInfo = " (counting...)";
+                // Currently counting
+                PageInfo = $"Page {_currentPage + 1} | Events {startEvent:N0}-{endEvent:N0} (counting total...)";
             }
-
-            PageInfo = $"Page {_currentPage + 1} | Events {startEvent:N0}-{endEvent:N0}{moreIndicator}{totalInfo}";
+            else
+            {
+                // No count available
+                var moreIndicator = HasMorePages ? "+" : "";
+                PageInfo = $"Page {_currentPage + 1} | Events {startEvent:N0}-{endEvent:N0}{moreIndicator}";
+            }
         }
         #endregion
 
@@ -996,10 +1094,25 @@ namespace ZViewer.ViewModels
         {
             _searchCancellation?.Cancel();
             _searchCancellation?.Dispose();
+            _countingCts?.Cancel();
+            _countingCts?.Dispose();
             _monitoringSubscription?.Dispose();
             _autoRefreshTimer?.Dispose();
             _disposables?.Dispose();
+
+            // Clean up the service if it implements IDisposable
+            if (_eventLogService is IDisposable disposableService)
+            {
+                disposableService.Dispose();
+            }
         }
         #endregion
+    }
+
+    // Optional interface for extended EventLogService functionality
+    public interface IEventLogServiceExtended : IEventLogService
+    {
+        Task<long> GetTotalEventCountAsync(string logName, DateTime startTime, IProgress<long>? progress, CancellationToken cancellationToken);
+        Task<long> GetEstimatedEventCountAsync(string logName, DateTime startTime);
     }
 }

@@ -1,92 +1,50 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net9.0-windows</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<ApplicationManifest>app.manifest</ApplicationManifest>
+		<UseWPF>true</UseWPF>
+		<!-- Application Icon -->
+		<ApplicationIcon>Assets\ZViewer.ico</ApplicationIcon>
+		<!-- Suppress Windows-only API warnings since this is a Windows-specific app -->
+		<NoWarn>$(NoWarn);CA1416</NoWarn>
+	</PropertyGroup>
 
-  <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-	<ApplicationManifest>app.manifest</ApplicationManifest>
-    <UseWPF>true</UseWPF>
+	<ItemGroup>
+		<!-- Assets -->
+		<None Remove="Assets\ZentrixLabs_Logo.png" />
+		<None Remove="Assets\ZViewer.ico" />
 
-	<!-- Application Icon -->
-	<ApplicationIcon>Assets\ZViewer.ico</ApplicationIcon>
+		<Content Include="Assets\ZentrixLabs_Logo.png">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
 
-	<!-- Suppress Windows-only API warnings since this is a Windows-specific app -->
-	<NoWarn>$(NoWarn);CA1416</NoWarn>
-	  
-  </PropertyGroup>
+		<Resource Include="Assets\ZViewer.ico">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Resource>
+	</ItemGroup>
 
-  <ItemGroup>
-    <None Remove="Assets\ZentrixLabs_Logo.png" />
-	<None Remove="Assets\ZViewer.ico" />
-	  <Resource Include="Themes\BaseStyles.xaml" />
-	  <Resource Include="Themes\Light.xaml" />
-	  <Resource Include="Themes\Dark.xaml" />
-	  <Resource Include="Themes\Colors\LightColors.xaml" />
-	  <Resource Include="Themes\Colors\DarkColors.xaml" />
-	  <Resource Include="Themes\**\*.xaml">
-		  <SubType>Designer</SubType>
-	  </Resource>
-  </ItemGroup>
+	<ItemGroup>
+		<!-- Theme files as Resources (use wildcard to include all) -->
+		<Resource Include="Themes\**\*.xaml" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <Page Remove="Themes\BaseStyles.xaml" />
-    <Page Remove="Themes\Dark.xaml" />
-    <Page Remove="Themes\DarkColors.xaml" />
-  </ItemGroup>
+	<ItemGroup>
+		<!-- NuGet Packages -->
+		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.6" />
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.6" />
+		<PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.6" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="9.0.6" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+		<PackageReference Include="Polly" Version="8.6.1" />
+		<PackageReference Include="Serilog.Extensions.Logging.File" Version="3.0.0" />
+		<PackageReference Include="System.Reactive" Version="6.0.1" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <Resource Remove="Themes\DarkColors.xaml" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Assets\ZentrixLabs_Logo.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-	<Resource Include="Assets\ZViewer.ico">
-	 <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	</Resource>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
-	<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.6" />
-	<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="9.0.6" />
-	<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
-	<PackageReference Include="Polly" Version="8.6.1" />
-	<PackageReference Include="Serilog.Extensions.Logging.File" Version="3.0.0" />
-	<PackageReference Include="System.Reactive" Version="6.0.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Converters\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="Themes\Colors\DarkColors.xaml">
-      <Generator>MSBuild:Compile</Generator>
-    </None>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Resource Update="Themes\BaseStyles.xaml">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-      <Generator>MSBuild:Compile</Generator>
-    </Resource>
-    <Resource Update="Themes\Dark.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-    </Resource>
-    <Resource Update="Themes\Light.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-    </Resource>
-    <Resource Update="Themes\Colors\LightColors.xaml">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-      <Generator>MSBuild:Compile</Generator>
-    </Resource>
-  </ItemGroup>
-
+	<ItemGroup>
+		<Folder Include="Converters\" />
+	</ItemGroup>
 </Project>

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 using ZViewer.Services;
 using ZViewer.ViewModels;
 
@@ -13,6 +14,7 @@ namespace ZViewer
     public partial class App : Application
     {
         private IHost? _host;
+        private IServiceProvider ServiceProvider => _host?.Services ?? throw new InvalidOperationException("Host is not initialized.");
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -45,8 +47,13 @@ namespace ZViewer
                     // ViewModels
                     services.AddTransient<MainViewModel>();
 
-                    // Windows
-                    services.AddTransient<MainWindow>();
+                    // Windows - Use factory pattern to inject IServiceProvider
+                    services.AddTransient<MainWindow>(provider =>
+                        new MainWindow(
+                            provider.GetRequiredService<MainViewModel>(),
+                            provider
+                        )
+                    );
                 })
                 .ConfigureLogging(logging =>
                 {
@@ -57,9 +64,8 @@ namespace ZViewer
                 })
                 .Build();
 
-            // Initialize theme
-            var themeService = _host.Services.GetRequiredService<IThemeService>();
-            themeService.LoadTheme();
+            // Initialize theme service with configuration
+            InitializeTheme();
 
             var mainWindow = _host.Services.GetRequiredService<MainWindow>();
             mainWindow.Show();
@@ -67,10 +73,63 @@ namespace ZViewer
             base.OnStartup(e);
         }
 
+        private void InitializeTheme()
+        {
+            try
+            {
+                var themeService = ServiceProvider.GetRequiredService<IThemeService>();
+                var configuration = ServiceProvider.GetRequiredService<IConfiguration>();
+                var options = configuration.GetSection("ZViewer").Get<ZViewerOptions>();
+
+                // Use theme from configuration, default to Light if not specified
+                var themeName = options?.Theme ?? "Light";
+                themeService.SetTheme(themeName);
+            }
+            catch (Exception ex)
+            {
+                var logger = ServiceProvider.GetService<ILogger<App>>();
+                logger?.LogError(ex, "Failed to initialize theme");
+
+                // Try to fall back to Light theme
+                try
+                {
+                    var themeService = ServiceProvider.GetRequiredService<IThemeService>();
+                    themeService.SetTheme("Light");
+                }
+                catch
+                {
+                    // If even that fails, continue without theme
+                    logger?.LogError("Could not load any theme, using application defaults");
+                }
+            }
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
             _host?.Dispose();
             base.OnExit(e);
+        }
+
+        private void Application_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+        {
+            var logger = ServiceProvider?.GetService<ILogger<App>>();
+            logger?.LogError(e.Exception, "Unhandled exception occurred");
+
+            var errorService = ServiceProvider?.GetService<IErrorService>();
+            if (errorService != null)
+            {
+                errorService.HandleError(e.Exception, "Unhandled Application Error");
+            }
+            else
+            {
+                MessageBox.Show(
+                    $"An unexpected error occurred: {e.Exception.Message}",
+                    "Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+
+            e.Handled = true;
         }
     }
 

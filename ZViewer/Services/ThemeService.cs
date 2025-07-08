@@ -1,72 +1,76 @@
 ﻿using System;
 using System.Windows;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ZViewer.Services
 {
     public interface IThemeService
     {
-        void LoadTheme();
         void SetTheme(string themeName);
         string CurrentTheme { get; }
+        event EventHandler<string> ThemeChanged;
     }
 
     public class ThemeService : IThemeService
     {
-        private readonly IOptions<ZViewerOptions> _options;
-        private readonly ILoggingService _loggingService;
-        private string _currentTheme;
-
-        public ThemeService(IOptions<ZViewerOptions> options, ILoggingService loggingService)
-        {
-            _options = options;
-            _loggingService = loggingService;
-            _currentTheme = _options.Value.Theme;
-        }
+        private readonly ILogger<ThemeService> _logger;
+        private readonly IOptionsMonitor<ZViewerOptions> _options;
+        private string _currentTheme = "Light";
 
         public string CurrentTheme => _currentTheme;
-
-        public void LoadTheme()
+        public event EventHandler<string> ThemeChanged = delegate { };
+        public ThemeService(ILogger<ThemeService> logger, IOptionsMonitor<ZViewerOptions> options)
         {
-            SetTheme(_options.Value.Theme);
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _options = options ?? throw new ArgumentNullException(nameof(options));
+
+            // Set initial theme from configuration if available
+            if (_options.CurrentValue != null)
+            {
+                _currentTheme = _options.CurrentValue.Theme ?? "Light";
+            }
         }
+
 
         public void SetTheme(string themeName)
         {
             try
             {
-                _loggingService.LogInformation("Setting theme to {ThemeName}", themeName);
+                _logger.LogInformation("Attempting to set theme to {ThemeName}", themeName);
 
-                var app = Application.Current;
-                if (app == null) return;
-
-                // Clear existing theme dictionaries
-                app.Resources.MergedDictionaries.Clear();
-
-                // Load base styles
-                var baseStyles = new ResourceDictionary
+                // Clear existing theme resources (but keep the first one which is usually the app resources)
+                while (Application.Current.Resources.MergedDictionaries.Count > 1)
                 {
-                    Source = new Uri("/ZViewer;component/Themes/BaseStyles.xaml", UriKind.Relative)
-                };
-                app.Resources.MergedDictionaries.Add(baseStyles);
+                    Application.Current.Resources.MergedDictionaries.RemoveAt(1);
+                }
 
-                // Load theme-specific dictionary
-                var themeUri = themeName.ToLower() switch
-                {
-                    "dark" => new Uri("/ZViewer;component/Themes/DarkTheme.xaml", UriKind.Relative),
-                    "light" => new Uri("/ZViewer;component/Themes/LightTheme.xaml", UriKind.Relative),
-                    _ => new Uri("/ZViewer;component/Themes/LightTheme.xaml", UriKind.Relative)
-                };
+                // Build the theme URI
+                var themeUri = new Uri($"pack://application:,,,/ZViewer;component/Themes/{themeName}.xaml");
 
-                var themeDictionary = new ResourceDictionary { Source = themeUri };
-                app.Resources.MergedDictionaries.Add(themeDictionary);
+                // Create and add the resource dictionary
+                var themeDict = new ResourceDictionary { Source = themeUri };
+                Application.Current.Resources.MergedDictionaries.Add(themeDict);
 
                 _currentTheme = themeName;
-                _loggingService.LogInformation("Theme set to {ThemeName}", themeName);
+                ThemeChanged?.Invoke(this, themeName);
+                _logger.LogInformation("Successfully set theme to {ThemeName}", themeName);
             }
             catch (Exception ex)
             {
-                _loggingService.LogError(ex, "Failed to set theme {ThemeName}", themeName);
+                _logger.LogError(ex, "Failed to set theme {ThemeName}", themeName);
+
+                // Try to fall back to light theme if not already attempting it
+                if (themeName != "Light")
+                {
+                    _logger.LogWarning("Attempting to fall back to Light theme");
+                    SetTheme("Light");
+                }
+                else
+                {
+                    // If even Light theme fails, use embedded default
+                    _logger.LogError("Could not load any theme, using application defaults");
+                }
             }
         }
     }

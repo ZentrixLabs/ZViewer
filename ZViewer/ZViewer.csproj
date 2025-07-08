@@ -19,6 +19,9 @@
   <ItemGroup>
     <None Remove="Assets\ZentrixLabs_Logo.png" />
 	<None Remove="Assets\ZViewer.ico" />
+	  <Resource Include="Themes\**\*.xaml">
+		  <SubType>Designer</SubType>
+	  </Resource>
   </ItemGroup>
 
   <ItemGroup>

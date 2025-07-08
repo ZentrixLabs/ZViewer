@@ -1,15 +1,60 @@
-﻿using ZViewer.Models;
+﻿using System;
+using System.Windows;
+using System.Windows.Controls;
+using Microsoft.Extensions.DependencyInjection;
+using ZViewer.Models;
+using ZViewer.Services;
 using ZViewer.ViewModels;
 
 namespace ZViewer
 {
     public partial class MainWindow : Window
     {
-        public MainWindow(MainViewModel viewModel)
+        private readonly IServiceProvider _serviceProvider;
+
+        public MainWindow(MainViewModel viewModel, IServiceProvider serviceProvider)
         {
             InitializeComponent();
             DataContext = viewModel;
+            _serviceProvider = serviceProvider;
+            InitializeThemeSelector();
         }
+
+        private void InitializeThemeSelector()
+        {
+            // If you have a ThemeSelector ComboBox in your XAML, initialize it here
+            if (FindName("ThemeSelector") is ComboBox themeSelector)
+            {
+                var themeService = _serviceProvider.GetRequiredService<IThemeService>();
+                // Set the initial selection based on current theme
+                foreach (ComboBoxItem item in themeSelector.Items)
+                {
+                    if (item.Content.ToString() == themeService.CurrentTheme)
+                    {
+                        themeSelector.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void ThemeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
+            {
+                var themeName = item.Content?.ToString();
+                if (!string.IsNullOrEmpty(themeName))
+                {
+                    var themeService = _serviceProvider.GetRequiredService<IThemeService>();
+                    themeService.SetTheme(themeName);
+                }
+                else
+                {
+                    MessageBox.Show("Selected theme name is invalid.", "Theme Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+        }
+
 
         private void Close_Click(object sender, RoutedEventArgs e)
         {
